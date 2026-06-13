@@ -46,9 +46,8 @@ jobs:
       - name: Test yt-dlp verbose
         run: |
           . venv/bin/activate
-          python3 << 'PYEOF' 2>&1 | tee ytdlp_debug.log
-import yt_dlp, os, json
-
+          python3 -c "
+import yt_dlp, json
 opts = {
     'format': 'bestaudio[ext=webm]/bestaudio[ext=m4a]/bestaudio/best',
     'cookiefile': 'cookies.txt',
@@ -63,14 +62,7 @@ try:
     print('FORMATS:', len(data.get('formats', [])))
 except Exception as e:
     print('FAILED:', e)
-PYEOF
-          echo "--- Done ---"
-
-      - name: Upload debug log
-        uses: actions/upload-artifact@v4
-        with:
-          name: ytdlp-debug
-          path: ytdlp_debug.log
+" 2>&1 | tee ytdlp_debug.log
 
       - name: Run bot
         env:
