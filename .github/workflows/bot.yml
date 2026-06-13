@@ -47,13 +47,21 @@ jobs:
           fi
 
       - name: Verify cookies
+        env:
+          YT_COOKIES_FILE: cookies.txt
         run: |
-          if [ -f cookies.txt ]; then
-            echo "cookies.txt exists: $(wc -l < cookies.txt) lines, $(wc -c < cookies.txt) bytes"
-            head -1 cookies.txt
-          else
-            echo "cookies.txt NOT FOUND"
-          fi
+          . venv/bin/activate
+          python3 -c "
+import os
+fn = os.environ.get('YT_COOKIES_FILE', 'cookies.txt')
+print(f'YT_COOKIES_FILE={fn}')
+print(f'exists={os.path.isfile(fn)}')
+if os.path.isfile(fn):
+    with open(fn) as f:
+        print(f'lines={sum(1 for _ in f)}')
+        f.seek(0)
+        print(f'first line: {f.readline().strip()!r}')
+"
 
       - name: Run bot
         env:
