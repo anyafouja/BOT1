@@ -57,3 +57,4 @@ Prefix: `cachy `
 | `cachy shuffle` | Acak |
 | `cachy clear-queue` | Kosongin |
 | `cachy ping` | Cek bot |
+
