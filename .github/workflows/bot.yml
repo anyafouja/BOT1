@@ -12,23 +12,23 @@ jobs:
   run-bot:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - run: sudo apt update -qq && sudo apt install -y -qq ffmpeg libopus0
-      - uses: actions/setup-python@v5
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: System deps
+        run: sudo apt update -qq && sudo apt install -y -qq ffmpeg libopus0
+      - name: Python
+        uses: actions/setup-python@v5
         with:
           python-version: "3.12"
       - name: Install deps
-        run: |
-          pip install -q -r requirements.txt
+        run: pip install -q -r requirements.txt
       - name: Env
         run: echo "DISCORD_TOKEN=${{ secrets.DISCORD_TOKEN }}" > .env
       - name: Cookies
         env:
           B64: ${{ secrets.YT_COOKIES }}
         run: printf "%s" "$B64" | base64 -d > cookies.txt
-      - name: Test
-        env:
-          YT_COOKIES_FILE: cookies.txt
+      - name: Test yt-dlp
         run: |
           python3 -c "
 import yt_dlp
@@ -37,12 +37,12 @@ with yt_dlp.YoutubeDL(opts) as ydl:
     d = ydl.extract_info('https://www.youtube.com/watch?v=dQw4w9WgXcQ', download=False)
     print('OK:', d.get('title'), len(d.get('formats',[])))
 " 2>&1 | tee /tmp/yt.log
-      - uses: actions/upload-artifact@v4
+      - name: Upload log
+        uses: actions/upload-artifact@v4
         with:
           name: log
           path: /tmp/yt.log
       - name: Run bot
         env:
           YT_COOKIES_FILE: cookies.txt
-        run: |
-          python3 main.py
+        run: python3 main.py
