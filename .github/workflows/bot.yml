@@ -43,7 +43,7 @@ jobs:
       - name: Setup cookies
         run: |
           if [ -n "${{ secrets.YT_COOKIES }}" ]; then
-            echo "${{ secrets.YT_COOKIES }}" | base64 -d > cookies.txt
+            printf "%s" "${{ secrets.YT_COOKIES }}" | base64 -d > cookies.txt
           fi
 
       - name: Run bot
