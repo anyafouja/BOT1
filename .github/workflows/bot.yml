@@ -44,6 +44,8 @@ jobs:
         run: |
           if [ -n "${{ secrets.YT_COOKIES }}" ]; then
             printf "%s" "${{ secrets.YT_COOKIES }}" | base64 -d > cookies.txt
+            wc -l cookies.txt
+            head -1 cookies.txt
           fi
 
       - name: Run bot
