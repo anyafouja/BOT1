@@ -1,1 +1,1 @@
-bot
+Cachy Music Discord Bot
