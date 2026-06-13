@@ -19,11 +19,17 @@ FFMPEG_OPTIONS = {
 
 
 def _extract_info(url: str) -> dict:
+    import re
+    if not re.match(r'https?://', url):
+        url = 'ytsearch:' + url
     cmd = ['yt-dlp', '--remote-components', 'ejs:github', '-j', url]
     cookies = os.environ.get('YT_COOKIES_FILE') or 'cookies.txt'
     if os.path.isfile(cookies):
         cmd.extend(['--cookies', cookies])
-    out = subprocess.check_output(cmd, text=True, timeout=30)
+    try:
+        out = subprocess.check_output(cmd, text=True, timeout=30, stderr=subprocess.PIPE)
+    except subprocess.CalledProcessError as e:
+        raise RuntimeError(e.stderr.strip() or str(e))
     data = json.loads(out)
     if 'entries' in data:
         data = data['entries'][0]
