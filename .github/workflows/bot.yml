@@ -37,7 +37,15 @@ jobs:
       - name: Create .env
         run: echo "DISCORD_TOKEN=${{ secrets.DISCORD_TOKEN }}" > .env
 
+      - name: Setup cookies
+        run: |
+          if [ -n "${{ secrets.YT_COOKIES }}" ]; then
+            echo "${{ secrets.YT_COOKIES }}" | base64 -d > cookies.txt
+          fi
+
       - name: Run bot
+        env:
+          YT_COOKIES_FILE: cookies.txt
         run: |
           . venv/bin/activate
           python main.py

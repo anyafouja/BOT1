@@ -3,6 +3,7 @@ import discord
 import yt_dlp
 import random
 import itertools
+import os
 from discord.ext import commands
 
 yt_dlp.utils.bug_reports_message = lambda *args, **kwargs: ''
@@ -33,7 +34,11 @@ FFMPEG_OPTIONS = {
 
 
 def _make_ytdl():
-    return yt_dlp.YoutubeDL(YTDL_FORMAT_OPTIONS)
+    opts = dict(YTDL_FORMAT_OPTIONS)
+    cookies = os.environ.get('YT_COOKIES_FILE') or 'cookies.txt'
+    if os.path.isfile(cookies):
+        opts['cookiefile'] = cookies
+    return yt_dlp.YoutubeDL(opts)
 
 
 def _extract_info(url: str) -> dict:

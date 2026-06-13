@@ -6,29 +6,33 @@ Discord music bot jalan di **GitHub Actions**. Gak perlu VPS.
 
 ### 1. Upload ke GitHub
 
-Bikin repo private baru di GitHub, lalu:
+Upload isi folder `BOT/` ke repo private GitHub.
 
-```bash
-git clone https://github.com/USER/REPO.git
-# copy semua isi folder BOT ke dalam repo
-cp -r BOT/* .
-cp -r BOT/.* .
-git add .
-git commit -m "init"
-git push
-```
+### 2. Tambah secrets
 
-Atau upload manual lewat web GitHub (drag & drop isi folder BOT).
+GitHub repo → **Settings** → **Secrets and variables** → **Actions** → **New repository secret**:
 
-### 2. Tambah token
+| Secret | Value |
+|--------|-------|
+| `DISCORD_TOKEN` | Token bot Discord |
+| `YT_COOKIES` | *(opsional)* Cookies YouTube base64 — kalo kena error "Sign in to confirm" |
 
-- GitHub repo → **Settings** → **Secrets and variables** → **Actions**
-- New secret: `DISCORD_TOKEN` → isi token bot
+**Cara dapetin cookies:**
+- Install ekstensi [Get cookies.txt](https://chrome.google.com/webstore/detail/get-cookiestxt/bgaddhkoddajcdgocldbbfleckgcbcid) di Chrome
+- Buka youtube.com, login
+- Klik ekstensi → **Export** → simpan file
+- Encode ke base64:
+  ```bash
+  base64 -w0 cookies.txt
+  ```
+- Copy outputnya → paste ke secret `YT_COOKIES`
 
 ### 3. Jalankan
 
 - Tab **Actions** → **Cachy Music Bot** → **Run workflow**
 - Bot online di Discord
+
+> Status Action akan "running" terus selagi bot hidup. Itu normal.
 
 ## Commands
 
