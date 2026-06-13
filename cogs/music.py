@@ -1,27 +1,11 @@
 import asyncio
 import discord
-import yt_dlp
 import random
 import itertools
 import os
+import json
+import subprocess
 from discord.ext import commands
-
-yt_dlp.utils.bug_reports_message = lambda *args, **kwargs: ''
-
-YTDL_FORMAT_OPTIONS = {
-    'format': 'bestaudio[ext=webm]/bestaudio[ext=m4a]/bestaudio/best',
-    'restrictfilenames': True,
-    'noplaylist': True,
-    'nocheckcertificate': True,
-    'ignoreerrors': False,
-    'logtostderr': False,
-    'quiet': True,
-    'no_warnings': True,
-    'default_search': 'ytsearch',
-    'source_address': '0.0.0.0',
-    'socket_timeout': 15,
-
-}
 
 FFMPEG_OPTIONS = {
     'before_options': (
@@ -34,17 +18,13 @@ FFMPEG_OPTIONS = {
 }
 
 
-def _make_ytdl():
-    opts = dict(YTDL_FORMAT_OPTIONS)
+def _extract_info(url: str) -> dict:
+    cmd = ['yt-dlp', '--remote-components', 'ejs:github', '-j', url]
     cookies = os.environ.get('YT_COOKIES_FILE') or 'cookies.txt'
     if os.path.isfile(cookies):
-        opts['cookiefile'] = cookies
-    return yt_dlp.YoutubeDL(opts)
-
-
-def _extract_info(url: str) -> dict:
-    with _make_ytdl() as ytdl:
-        data = ytdl.extract_info(url, download=False)
+        cmd.extend(['--cookies', cookies])
+    out = subprocess.check_output(cmd, text=True, timeout=30)
+    data = json.loads(out)
     if 'entries' in data:
         data = data['entries'][0]
     return data
