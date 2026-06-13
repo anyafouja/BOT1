@@ -41,11 +41,18 @@ jobs:
         run: echo "DISCORD_TOKEN=${{ secrets.DISCORD_TOKEN }}" > .env
 
       - name: Setup cookies
-        shell: bash
         run: |
           if [ -n "${{ secrets.YT_COOKIES }}" ]; then
-            echo "${{ secrets.YT_COOKIES }}" | base64 -d > cookies.txt
-            echo "Cookies file: $(wc -l < cookies.txt) lines"
+            printf "%s\n" "${{ secrets.YT_COOKIES }}" | base64 -d > cookies.txt
+          fi
+
+      - name: Verify cookies
+        run: |
+          if [ -f cookies.txt ]; then
+            echo "cookies.txt exists: $(wc -l < cookies.txt) lines, $(wc -c < cookies.txt) bytes"
+            head -1 cookies.txt
+          else
+            echo "cookies.txt NOT FOUND"
           fi
 
       - name: Run bot
