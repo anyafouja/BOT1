@@ -76,6 +76,16 @@ jobs:
         with:
           name: cookies.txt
 
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install deps
+        run: |
+          sudo apt install -y -qq ffmpeg libopus0
+          pip install -q -r requirements.txt
+
       - name: Install deno
         run: curl -fsSL https://deno.land/install.sh | sh
 
@@ -84,8 +94,5 @@ jobs:
           YT_COOKIES_FILE: cookies.txt
           PATH: $HOME/.deno/bin:$PATH
         run: |
-          python3 -m venv venv
-          . venv/bin/activate
-          pip install -q -r requirements.txt
           echo "DISCORD_TOKEN=${{ secrets.DISCORD_TOKEN }}" > .env
           python main.py
