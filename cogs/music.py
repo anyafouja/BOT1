@@ -20,6 +20,7 @@ YTDL_FORMAT_OPTIONS = {
     'default_search': 'ytsearch',
     'source_address': '0.0.0.0',
     'socket_timeout': 15,
+    'remote_components': {'ejs': 'github'},
 }
 
 FFMPEG_OPTIONS = {

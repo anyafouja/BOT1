@@ -23,6 +23,9 @@ jobs:
           sudo apt update -qq
           sudo apt install -y -qq ffmpeg libopus0 python3 python3-pip python3-venv
 
+      - name: Install deno
+        run: curl -fsSL https://deno.land/install.sh | sh
+
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
@@ -46,6 +49,7 @@ jobs:
       - name: Run bot
         env:
           YT_COOKIES_FILE: cookies.txt
+          PATH: $HOME/.deno/bin:$PATH
         run: |
           . venv/bin/activate
           python main.py
