@@ -43,6 +43,35 @@ jobs:
         run: |
           printf "%s" "$COOKIE_SECRET" | base64 -d > cookies.txt
 
+      - name: Test yt-dlp verbose
+        run: |
+          . venv/bin/activate
+          python3 << 'PYEOF' 2>&1 | tee ytdlp_debug.log
+import yt_dlp, os, json
+
+opts = {
+    'format': 'bestaudio[ext=webm]/bestaudio[ext=m4a]/bestaudio/best',
+    'cookiefile': 'cookies.txt',
+    'verbose': True,
+    'source_address': '0.0.0.0',
+    'socket_timeout': 15,
+}
+try:
+    with yt_dlp.YoutubeDL(opts) as ydl:
+        data = ydl.extract_info('https://www.youtube.com/watch?v=dQw4w9WgXcQ', download=False)
+    print('SUCCESS:', data.get('title'))
+    print('FORMATS:', len(data.get('formats', [])))
+except Exception as e:
+    print('FAILED:', e)
+PYEOF
+          echo "--- Done ---"
+
+      - name: Upload debug log
+        uses: actions/upload-artifact@v4
+        with:
+          name: ytdlp-debug
+          path: ytdlp_debug.log
+
       - name: Run bot
         env:
           YT_COOKIES_FILE: cookies.txt
