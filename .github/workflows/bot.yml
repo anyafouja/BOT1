@@ -17,7 +17,7 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - run: curl -fsSL https://deno.land/install.sh | sh
+      - run: curl -fsSL https://deno.land/install.sh | sh && echo "$HOME/.deno/bin" >> $GITHUB_PATH
       - run: pip install -q -r requirements.txt
       - run: echo "DISCORD_TOKEN=${{ secrets.DISCORD_TOKEN }}" > .env
       - name: setup cookies
@@ -27,5 +27,4 @@ jobs:
       - name: run
         env:
           YT_COOKIES_FILE: cookies.txt
-          PATH: $HOME/.deno/bin:$PATH
         run: python3 main.py
