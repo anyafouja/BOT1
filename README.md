@@ -17,15 +17,22 @@ GitHub repo → **Settings** → **Secrets and variables** → **Actions** → *
 | `DISCORD_TOKEN` | Token bot Discord |
 | `YT_COOKIES` | *(opsional)* Cookies YouTube base64 — kalo kena error "Sign in to confirm" |
 
-**Cara dapetin cookies:**
-- Install ekstensi [Get cookies.txt](https://chrome.google.com/webstore/detail/get-cookiestxt/bgaddhkoddajcdgocldbbfleckgcbcid) di Chrome
-- Buka youtube.com, login
-- Klik ekstensi → **Export** → simpan file
-- Encode ke base64:
-  ```bash
-  base64 -w0 cookies.txt
-  ```
-- Copy outputnya → paste ke secret `YT_COOKIES`
+**Cara dapetin cookies (tanpa addon):**
+
+Di terminal PC/laptop (udah login YouTube di browser):
+```bash
+# Chrome
+yt-dlp --cookies-from-browser chrome --cookies cookies.txt
+
+# Firefox
+yt-dlp --cookies-from-browser firefox --cookies cookies.txt
+```
+
+Encode ke base64:
+```bash
+base64 -w0 cookies.txt
+```
+Copy outputnya → paste ke secret `YT_COOKIES` di GitHub.
 
 ### 3. Jalankan
 
