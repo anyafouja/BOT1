@@ -18,5 +18,6 @@ jobs:
         with:
           python-version: "3.12"
       - run: pip install -q -r requirements.txt
+      - run: curl -fsSL https://deno.land/install.sh | sh && echo "$HOME/.deno/bin" >> $GITHUB_PATH
       - run: echo "DISCORD_TOKEN=${{ secrets.DISCORD_TOKEN }}" > .env
       - run: python3 main.py
