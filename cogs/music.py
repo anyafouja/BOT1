@@ -19,24 +19,46 @@ FFMPEG_OPTIONS = {
 
 
 def _extract_info(url: str) -> dict:
-    import re
+    import re, time
     if not re.match(r'https?://', url):
         url = 'ytsearch:' + url
     cookies = os.environ.get('YT_COOKIES_FILE') or 'cookies.txt'
     cookie_args = ['--cookies', cookies] if os.path.isfile(cookies) else []
-    cmd = ['yt-dlp', *cookie_args, '--remote-components', 'ejs:github', '-f', 'bestaudio[ext=webm]/bestaudio', '-g', '-j', '--no-playlist', '--quiet', url]
-    try:
-        out = subprocess.check_output(cmd, text=True, timeout=30, stderr=subprocess.PIPE)
-    except subprocess.CalledProcessError as e:
-        raise RuntimeError(e.stderr.strip() or str(e))
-    lines = out.strip().split('\n')
-    stream_url = lines[0] if lines else ''
-    json_str = next((l for l in reversed(lines) if l.startswith('{')), '{}')
-    data = json.loads(json_str)
-    if 'entries' in data:
-        data = data['entries'][0]
-    data['url'] = stream_url
-    return data
+    clients = ['android', 'android_music', 'web']
+    last_err = ''
+    for client in clients:
+        try:
+            cmd = [
+                'yt-dlp',
+                *cookie_args,
+                '--remote-components', 'ejs:github',
+                '--extractor-args', f'youtube:player_client={client}',
+                '-f', 'bestaudio[ext=webm]/bestaudio/best',
+                '--print', 'url',
+                '--print', 'json',
+                '--no-playlist', '--quiet', url,
+            ]
+            out = subprocess.check_output(cmd, text=True, timeout=45, stderr=subprocess.PIPE)
+        except subprocess.CalledProcessError as e:
+            err = e.stderr.strip()
+            last_err = err or str(e)
+            if '429' in err:
+                time.sleep(3)
+                continue
+            continue
+        lines = [l for l in out.strip().split('\n') if l]
+        if not lines:
+            continue
+        stream_url = lines[0]
+        json_str = next((l for l in reversed(lines) if l.startswith('{')), '{}')
+        if json_str == '{}' and not stream_url:
+            continue
+        data = json.loads(json_str) if json_str != '{}' else {}
+        if 'entries' in data:
+            data = data['entries'][0]
+        data['url'] = stream_url
+        return data
+    raise RuntimeError(last_err or 'No format available')
 
 
 class YTDLSource(discord.PCMVolumeTransformer):
