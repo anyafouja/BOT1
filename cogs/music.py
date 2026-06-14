@@ -30,9 +30,9 @@ def _extract_info(url: str) -> dict:
                 cmd = [
                     'yt-dlp',
                     '--remote-components', 'ejs:github',
-                    '--extractor-args', f'youtube:player_client={client},youtube:skip=webpage',
-                    '--throttled-rate', '100',
-                    '-f', 'bestaudio[ext=webm]/bestaudio/best',
+                    '--extractor-args', f'youtube:player_client={client}',
+                    '--extractor-args', 'youtube:skip=webpage',
+                    '-f', 'bestaudio[ext=webm]/bestaudio',
                     '--print', 'url',
                     '--print', 'json',
                     '--no-playlist', '--quiet', url,
