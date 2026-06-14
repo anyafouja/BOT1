@@ -109,9 +109,11 @@ async def refresh_cookies_playwright() -> bool:
 
 
 async def ensure_cookies():
+    if os.getenv('GOOGLE_EMAIL'):
+        return await refresh_cookies_playwright()
     if os.path.exists(COOKIES_FILE) and os.path.getsize(COOKIES_FILE) > 50:
         return True
-    return await refresh_cookies_playwright()
+    return False
 
 
 async def ytdlp_get_url(query: str) -> str | None:
