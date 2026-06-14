@@ -1,5 +1,5 @@
 discord.py[voice]
-yt-dlp
+wavelink>=3.5
 python-dotenv
 PyNaCl
 davey

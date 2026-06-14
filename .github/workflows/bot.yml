@@ -17,14 +17,24 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - run: curl -fsSL https://deno.land/install.sh | sh && echo "$HOME/.deno/bin" >> $GITHUB_PATH
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
       - run: pip install -q -r requirements.txt
       - run: echo "DISCORD_TOKEN=${{ secrets.DISCORD_TOKEN }}" > .env
-      - name: setup cookies
-        env:
-          B64: ${{ secrets.YT_COOKIES }}
-        run: printf "%s" "$B64" | base64 -d > cookies.txt
-      - name: run
-        env:
-          YT_COOKIES_FILE: cookies.txt
-        run: python3 main.py
+      - name: download Lavalink
+        run: curl -sL https://github.com/lavalink-devs/Lavalink/releases/download/4.2.2/Lavalink.jar -o Lavalink.jar
+      - name: start Lavalink
+        run: java -jar Lavalink.jar --config lavalink/application.yml &
+      - name: wait for Lavalink
+        run: |
+          for i in $(seq 1 30); do
+            if curl -s -o /dev/null http://localhost:2333/ 2>/dev/null; then
+              echo "Lavalink ready"
+              break
+            fi
+            echo "Waiting for Lavalink... ($i)"
+            sleep 2
+          done
+      - run: python3 main.py

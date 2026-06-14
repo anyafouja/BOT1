@@ -1,191 +1,35 @@
 import asyncio
 import discord
-import random
-import itertools
-import os
-import json
-import subprocess
+from collections import deque
 from discord.ext import commands
-
-FFMPEG_OPTIONS = {
-    'before_options': (
-        '-reconnect 1 '
-        '-reconnect_streamed 1 '
-        '-reconnect_delay_max 5 '
-        '-reconnect_on_network_error 1 '
-    ),
-    'options': '-vn',
-}
+import wavelink
+from wavelink import QueueMode
 
 
-def _extract_info(url: str) -> dict:
-    import re
-    if not re.match(r'https?://', url):
-        url = 'ytsearch:' + url
-    cmd = ['yt-dlp', '--remote-components', 'ejs:github', '--js-runtimes', 'deno', '--extractor-args', 'youtube:player_client=tv', '--no-cookies', '-j', url]
-    try:
-        out = subprocess.check_output(cmd, text=True, timeout=30, stderr=subprocess.PIPE)
-    except subprocess.CalledProcessError as e:
-        raise RuntimeError(e.stderr.strip() or str(e))
-    data = json.loads(out)
-    if 'entries' in data:
-        data = data['entries'][0]
-    return data
+class CachyPlayer(wavelink.Player):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.text_channel: discord.TextChannel | None = None
+        self.np_message: discord.Message | None = None
+        self.loop_mode: int = 0
+        self._last_tracks: deque[wavelink.Playable] = deque(maxlen=20)
 
-
-class YTDLSource(discord.PCMVolumeTransformer):
-    def __init__(self, source, *, data, volume=0.5):
-        super().__init__(source, volume)
-        self.data = data
-        self.title = data.get('title')
-        self.url = data.get('url')
-        self.thumbnail = data.get('thumbnail')
-        self.webpage_url = data.get('webpage_url')
-
-    @classmethod
-    async def from_data(cls, data: dict, volume=0.5):
-        stream_url = data['url']
-        source = discord.FFmpegPCMAudio(stream_url, **FFMPEG_OPTIONS)
-        return cls(source, data=data, volume=volume)
-
-    @classmethod
-    async def from_url(cls, url: str, volume=0.5):
-        data = await asyncio.get_event_loop().run_in_executor(None, _extract_info, url)
-        return await cls.from_data(data, volume=volume)
-
-
-class MusicPlayer:
-    __slots__ = (
-        'bot', '_guild', '_channel', '_cog',
-        'queue', 'current', 'np', 'volume',
-        'loop', '_stop', '_next_up', 'history',
-        '_task', '_finished',
-    )
-
-    def __init__(self, ctx):
-        self.bot = ctx.bot
-        self._guild = ctx.guild
-        self._channel = ctx.channel
-        self._cog = ctx.cog
-
-        self.queue = asyncio.Queue()
-        self.np = None
-        self.volume = 0.5
-        self.current = None
-        self.loop = False
-        self._stop = False
-        self._next_up = None
-        self.history = []
-
-        self._finished = asyncio.Event()
-
-        self._task = ctx.bot.loop.create_task(self.player_loop())
-
-    def _after_playing(self, error):
-        if error:
-            print(f'[MusicPlayer] Playback error: {error}')
-        self.bot.loop.call_soon_threadsafe(self._finished.set)
-
-    async def player_loop(self):
-        await self.bot.wait_until_ready()
-
-        while not self.bot.is_closed():
-            self._stop = False
-            self._finished.clear()
-
+    async def destroy(self):
+        if self.np_message:
             try:
-                if self._next_up:
-                    item = self._next_up
-                    self._next_up = None
-                elif self.loop and self.current:
-                    item = (self.current.title, self.current.webpage_url)
-                else:
-                    item = await asyncio.wait_for(self.queue.get(), timeout=300)
-            except asyncio.TimeoutError:
-                await self._cog.cleanup(self._guild)
-                return
-            except asyncio.CancelledError:
-                return
-
-            if isinstance(item, str):
-                url = item
-                title = url
-                data = None
-            else:
-                title = item[0]
-                url = item[1]
-                data = item[2] if len(item) >= 3 else None
-
-            try:
-                if data:
-                    source = await YTDLSource.from_data(data, volume=self.volume)
-                else:
-                    source = await YTDLSource.from_url(url, volume=self.volume)
-            except Exception as e:
-                await self._channel.send(f'Error processing song: `{e}`')
-                continue
-
-            self.current = source
-
-            vc = self._guild.voice_client
-            if not vc:
-                await self._channel.send('Lost connection to voice channel.')
-                await self._cog.cleanup(self._guild)
-                return
-
-            try:
-                vc.play(source, after=self._after_playing)
-            except Exception as e:
-                await self._channel.send(f'Error starting playback: `{e}`')
-                self.current = None
-                continue
-
-            view = NowPlayingView(self, self._guild.id)
-
-            try:
-                embed = discord.Embed(color=0xFFC0CB)
-                if source.thumbnail:
-                    embed.set_image(url=source.thumbnail)
-                if self.np:
-                    try:
-                        await self.np.delete()
-                    except Exception:
-                        pass
-                self.np = await self._channel.send(embed=embed, view=view)
+                await self.np_message.delete()
             except Exception:
                 pass
-
-            try:
-                await asyncio.wait_for(self._finished.wait(), timeout=600)
-            except asyncio.TimeoutError:
-                vc = self._guild.voice_client
-                if vc:
-                    vc.stop()
-
-            if not self._stop and self.current:
-                self.history.append((self.current.title, self.current.webpage_url))
-                if len(self.history) > 20:
-                    self.history.pop(0)
-
-            try:
-                source.cleanup()
-            except Exception:
-                pass
-
-            if not self.loop:
-                self.current = None
-
-            if not self.current and self.queue.empty():
-                if self.np:
-                    try:
-                        await self.np.delete()
-                    except Exception:
-                        pass
-                self.np = None
+            self.np_message = None
+        try:
+            await self.disconnect(force=True)
+        except Exception:
+            pass
+        await super().destroy()
 
 
 class NowPlayingView(discord.ui.View):
-    def __init__(self, player, guild_id):
+    def __init__(self, player: CachyPlayer, guild_id: int):
         super().__init__(timeout=None)
         self.player = player
         self.guild_id = guild_id
@@ -206,27 +50,24 @@ class NowPlayingView(discord.ui.View):
     @discord.ui.button(label='\u25C1\u25C1', style=discord.ButtonStyle.secondary)
     async def previous(self, interaction: discord.Interaction, button: discord.ui.Button):
         player = self.player
-        if not player.current:
-            return await interaction.response.send_message('Nothing playing.', ephemeral=True)
-        if not player.history:
+        if not player._last_tracks:
             return await interaction.response.send_message('No previous song.', ephemeral=True)
-        player._next_up = player.history.pop()
-        player._stop = True
-        vc = interaction.guild.voice_client
-        if vc:
-            vc.stop()
+        prev = player._last_tracks.pop()
+        player.queue.put_at(0, prev)
+        if player.playing or player.paused:
+            await player.skip()
+        else:
+            await player.play(player.queue.get())
         await interaction.response.defer()
 
     @discord.ui.button(label='||', style=discord.ButtonStyle.secondary)
     async def pause_play(self, interaction: discord.Interaction, button: discord.ui.Button):
-        vc = interaction.guild.voice_client
-        if not vc:
-            return await interaction.response.send_message('Not connected.', ephemeral=True)
-        if vc.is_paused():
-            vc.resume()
+        player = self.player
+        if player.paused:
+            await player.pause(False)
             button.label = '||'
-        elif vc.is_playing():
-            vc.pause()
+        elif player.playing:
+            await player.pause(True)
             button.label = '\u25B7'
         else:
             return await interaction.response.send_message('Nothing playing.', ephemeral=True)
@@ -235,218 +76,283 @@ class NowPlayingView(discord.ui.View):
     @discord.ui.button(label='\u25B7\u25B7', style=discord.ButtonStyle.secondary)
     async def next_(self, interaction: discord.Interaction, button: discord.ui.Button):
         player = self.player
-        if not player.current:
+        if not player.playing and not player.paused:
             return await interaction.response.send_message('Nothing playing.', ephemeral=True)
-        player._stop = True
-        vc = interaction.guild.voice_client
-        if vc:
-            vc.stop()
+        await player.skip()
         await interaction.response.defer()
 
     @discord.ui.button(label='\u27F3', style=discord.ButtonStyle.secondary)
     async def loop_(self, interaction: discord.Interaction, button: discord.ui.Button):
         player = self.player
-        player.loop = not player.loop
-        button.label = '\u27F2' if player.loop else '\u27F3'
+        if player.loop_mode == 0:
+            player.loop_mode = 1
+            player.queue.mode = QueueMode.loop
+            button.label = '\u27F2'
+        elif player.loop_mode == 1:
+            player.loop_mode = 2
+            player.queue.mode = QueueMode.loop_all
+            button.label = '\u27F2'
+        else:
+            player.loop_mode = 0
+            player.queue.mode = QueueMode.normal
+            button.label = '\u27F3'
         await interaction.response.edit_message(view=self)
 
 
 class Music(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
-        self.players = {}
         self.locks = {}
 
-    async def cleanup(self, guild):
-        try:
-            player = self.players.get(guild.id)
-            if player:
-                player._stop = True
-                player._finished.set()
-                if player.np:
-                    try:
-                        await player.np.delete()
-                    except Exception:
-                        pass
-                    player.np = None
-                if player._task and not player._task.done():
-                    player._task.cancel()
-        except Exception:
-            pass
-        try:
-            await guild.voice_client.disconnect(force=True)
-        except Exception:
-            pass
-        self.players.pop(guild.id, None)
+    async def cleanup(self, guild) -> None:
+        player = guild.voice_client
+        if player and isinstance(player, CachyPlayer):
+            if player.np_message:
+                try:
+                    await player.np_message.delete()
+                except Exception:
+                    pass
+                player.np_message = None
+            try:
+                await player.destroy()
+            except Exception:
+                pass
         self.locks.pop(guild.id, None)
 
-    async def get_player(self, ctx):
+    async def get_player(self, ctx) -> CachyPlayer:
         guild_id = ctx.guild.id
         if guild_id not in self.locks:
             self.locks[guild_id] = asyncio.Lock()
         async with self.locks[guild_id]:
-            if guild_id not in self.players:
-                self.players[guild_id] = MusicPlayer(ctx)
-            return self.players[guild_id]
-
-    @commands.Cog.listener()
-    async def on_voice_state_update(self, member, before, after):
-        if member.id == self.bot.user.id:
-            if after.channel is None:
-                await self.cleanup(member.guild)
-            return
-        vc = member.guild.voice_client
-        if vc and vc.channel and len([m for m in vc.channel.members if not m.bot]) == 0:
-            await asyncio.sleep(60)
-            vc = member.guild.voice_client
-            if vc and vc.channel and len([m for m in vc.channel.members if not m.bot]) == 0:
-                await self.cleanup(member.guild)
-
-    @commands.hybrid_command(name='play', aliases=['p'])
-    async def play_(self, ctx, *, search: str):
-        """Plays a song from YouTube."""
-        async with ctx.typing():
-            vc = ctx.voice_client
-            if not vc:
+            player = ctx.voice_client
+            if not player or not isinstance(player, CachyPlayer):
                 if ctx.author.voice:
                     try:
                         await ctx.author.voice.channel.edit(rtc_region='singapore')
                     except Exception:
                         pass
-                    vc = await ctx.author.voice.channel.connect(reconnect=True)
+                    player = await ctx.author.voice.channel.connect(cls=CachyPlayer)
+                    player.inactive_timeout = 60
+                    player.text_channel = ctx.channel
                 else:
-                    return await ctx.send('You are not connected to a voice channel.')
-            elif ctx.author.voice and vc.channel != ctx.author.voice.channel:
-                await vc.move_to(ctx.author.voice.channel)
+                    raise RuntimeError('Not connected to a voice channel.')
+            elif ctx.author.voice and player.channel != ctx.author.voice.channel:
+                await player.move_to(ctx.author.voice.channel)
+            player.text_channel = ctx.channel
+            return player
 
+    def get_cachy_player(self, guild) -> CachyPlayer | None:
+        vc = guild.voice_client
+        if vc and isinstance(vc, CachyPlayer):
+            return vc
+        return None
+
+    @commands.Cog.listener()
+    async def on_wavelink_track_start(self, payload: wavelink.TrackStartEventPayload):
+        player: CachyPlayer | None = payload.player
+        if not player:
+            return
+        track = payload.original or payload.track
+        if not player.text_channel:
+            return
+
+        view = NowPlayingView(player, player.guild.id)
+        embed = discord.Embed(color=0xFFC0CB)
+        if track.artwork:
+            embed.set_image(url=track.artwork)
+
+        if player.np_message:
             try:
-                data = await asyncio.get_event_loop().run_in_executor(
-                    None, _extract_info, search
-                )
-                title = data.get('title', search)
-                url = data.get('webpage_url', search)
-                queue_item = (title, url, data)
-            except Exception as e:
-                await ctx.send(f'Failed to search for song: `{e}`')
-                return
+                await player.np_message.delete()
+            except Exception:
+                pass
+        try:
+            player.np_message = await player.text_channel.send(embed=embed, view=view)
+        except Exception:
+            pass
 
-        player = await self.get_player(ctx)
-        await player.queue.put(queue_item)
+    @commands.Cog.listener()
+    async def on_wavelink_track_end(self, payload: wavelink.TrackEndEventPayload):
+        player: CachyPlayer | None = payload.player
+        if not player or not payload.original:
+            return
+        if player.loop_mode == 0:
+            player._last_tracks.append(payload.original)
 
-        embed = discord.Embed(title='Added to Queue', color=0xFFC0CB)
-        embed.description = f'[{title}]({url})'
-        await ctx.send(embed=embed)
+    @commands.Cog.listener()
+    async def on_wavelink_inactive_player(self, player: CachyPlayer):
+        await self.cleanup(player.guild)
+
+    @commands.Cog.listener()
+    async def on_voice_state_update(self, member, before, after):
+        if member.id == self.bot.user.id:
+            if after.channel is None:
+                player = self.get_cachy_player(member.guild)
+                if player:
+                    await self.cleanup(member.guild)
+            return
+        vc = member.guild.voice_client
+        if vc and vc.channel:
+            real = [m for m in vc.channel.members if not m.bot]
+            if len(real) == 0:
+                await asyncio.sleep(60)
+                vc = member.guild.voice_client
+                if vc and vc.channel:
+                    real = [m for m in vc.channel.members if not m.bot]
+                    if len(real) == 0:
+                        await self.cleanup(member.guild)
+
+    @commands.hybrid_command(name='play', aliases=['p'])
+    async def play_(self, ctx, *, search: str):
+        """Play a song from YouTube."""
+        await ctx.defer()
+        try:
+            player = await self.get_player(ctx)
+        except RuntimeError as e:
+            await ctx.send(str(e))
+            return
+        except Exception as e:
+            await ctx.send(str(e))
+            return
+
+        tracks = await wavelink.Playable.search(search, source=wavelink.TrackSource.YouTube)
+        if not tracks:
+            await ctx.send('No results found.')
+            return
+        if isinstance(tracks, wavelink.Playlist):
+            for t in tracks:
+                player.queue.put(t)
+            embed = discord.Embed(description=f'Added {len(tracks)} songs from **{tracks.name}**', color=0xFFC0CB)
+            await ctx.send(embed=embed)
+        else:
+            track = tracks[0]
+            player.queue.put(track)
+            embed = discord.Embed(description=f'[{track.title}]({track.uri})', color=0xFFC0CB)
+            await ctx.send(embed=embed)
+
+        if not player.playing:
+            await player.play(player.queue.get())
 
     @commands.hybrid_command(name='skip', aliases=['s'])
     async def skip_(self, ctx):
-        """Skips the current song."""
-        vc = ctx.voice_client
-        if not vc or not (vc.is_playing() or vc.is_paused()):
-            return await ctx.send('Nothing is playing.')
-        player = await self.get_player(ctx)
-        player._stop = True
-        vc.stop()
-        player.current = None
+        """Skip the current song."""
+        player = self.get_cachy_player(ctx.guild)
+        if not player or not player.playing:
+            return await ctx.send('Nothing playing.')
+        await player.skip()
         await ctx.send(embed=discord.Embed(description='Skipped', color=0xFFC0CB))
 
     @commands.hybrid_command(name='stop')
     async def stop_(self, ctx):
-        """Stops playback and disconnects the bot."""
+        """Stop playback and disconnect."""
         vc = ctx.voice_client
         if not vc or not vc.is_connected():
             return await ctx.send('Not connected.')
         await self.cleanup(ctx.guild)
-        await ctx.send(embed=discord.Embed(description='Stopped', color=0xFFC0CB))
+        await ctx.send(embed=discord.Embed(description='Disconnected', color=0xFFC0CB))
 
     @commands.hybrid_command(name='pause')
     async def pause_(self, ctx):
-        """Pauses the music."""
-        vc = ctx.voice_client
-        if vc and vc.is_playing():
-            vc.pause()
+        """Pause the music."""
+        player = self.get_cachy_player(ctx.guild)
+        if player and player.playing:
+            await player.pause(True)
             await ctx.send(embed=discord.Embed(description='Paused', color=0xFFC0CB))
         else:
-            await ctx.send('Nothing is playing.')
+            await ctx.send('Nothing playing.')
 
     @commands.hybrid_command(name='resume')
     async def resume_(self, ctx):
-        """Resumes the paused music."""
-        vc = ctx.voice_client
-        if vc and vc.is_paused():
-            vc.resume()
+        """Resume the music."""
+        player = self.get_cachy_player(ctx.guild)
+        if player and player.paused:
+            await player.pause(False)
             await ctx.send(embed=discord.Embed(description='Resumed', color=0xFFC0CB))
         else:
             await ctx.send('Not paused.')
 
     @commands.hybrid_command(name='queue', aliases=['q'])
     async def queue_info(self, ctx):
-        """Shows the current song queue."""
-        player = await self.get_player(ctx)
-        if player.queue.empty():
+        """Show the song queue."""
+        player = self.get_cachy_player(ctx.guild)
+        if not player or player.queue.is_empty:
             return await ctx.send('Queue is empty.')
-        upcoming = list(itertools.islice(player.queue._queue, 0, 10))
-        fmt = '\n'.join(
-            f"**{i+1}.** {item[0]}" for i, item in enumerate(upcoming)
-        )
-        await ctx.send(embed=discord.Embed(title='Queue', description=fmt, color=0xFFC0CB))
+
+        upcoming = list(player.queue.copy())
+        track_count = len(upcoming)
+        max_tracks = 10
+        lines = []
+        for i, t in enumerate(upcoming[:max_tracks], 1):
+            lines.append(f'**{i}.** {t.title}')
+        if track_count > max_tracks:
+            lines.append(f'*... and {track_count - max_tracks} more*')
+
+        embed = discord.Embed(title=f'Queue ({track_count})', description='\n'.join(lines), color=0xFFC0CB)
+        await ctx.send(embed=embed)
 
     @commands.hybrid_command(name='volume', aliases=['vol'])
     async def change_volume(self, ctx, vol: int):
-        """Changes the bot volume (1-100)."""
-        vc = ctx.voice_client
-        if not vc or not 0 < vol <= 100:
+        """Set volume (1-100)."""
+        player = self.get_cachy_player(ctx.guild)
+        if not player or not 0 < vol <= 100:
             return await ctx.send('Invalid volume (1-100).')
-        player = await self.get_player(ctx)
-        player.volume = vol / 100
-        if vc.source:
-            vc.source.volume = vol / 100
+        await player.set_volume(vol * 10)
         await ctx.send(embed=discord.Embed(description=f'Volume: {vol}%', color=0xFFC0CB))
 
     @commands.hybrid_command(name='ping')
     async def ping_(self, ctx):
-        """Checks the bot latency."""
-        await ctx.send(embed=discord.Embed(
-            description=f'Pong! {round(self.bot.latency * 1000)}ms',
-            color=0xFFC0CB,
-        ))
+        """Check bot latency."""
+        await ctx.send(embed=discord.Embed(description=f'Pong! {round(self.bot.latency * 1000)}ms', color=0xFFC0CB))
 
     @commands.hybrid_command(name='clear-queue')
     async def clear_queue_(self, ctx):
-        """Clears all songs from the queue."""
-        player = await self.get_player(ctx)
-        while not player.queue.empty():
-            try:
-                player.queue.get_nowait()
-            except Exception:
-                break
+        """Clear all songs from the queue."""
+        player = self.get_cachy_player(ctx.guild)
+        if not player:
+            return await ctx.send('No queue to clear.')
+        player.queue.clear()
         await ctx.send(embed=discord.Embed(description='Queue cleared', color=0xFFC0CB))
 
     @commands.hybrid_command(name='loop')
     async def loop_(self, ctx):
-        """Toggles looping of the current song."""
-        player = await self.get_player(ctx)
-        player.loop = not player.loop
-        await ctx.send(embed=discord.Embed(
-            description=f'Loop {"on" if player.loop else "off"}',
-            color=0xFFC0CB,
-        ))
+        """Toggle looping (off -> single -> queue)."""
+        player = self.get_cachy_player(ctx.guild)
+        if not player:
+            return await ctx.send('Not connected.')
+        if player.loop_mode == 0:
+            player.loop_mode = 1
+            player.queue.mode = QueueMode.loop
+            text = 'Loop: single'
+        elif player.loop_mode == 1:
+            player.loop_mode = 2
+            player.queue.mode = QueueMode.loop_all
+            text = 'Loop: queue'
+        else:
+            player.loop_mode = 0
+            player.queue.mode = QueueMode.normal
+            text = 'Loop: off'
+        await ctx.send(embed=discord.Embed(description=text, color=0xFFC0CB))
 
     @commands.hybrid_command(name='shuffle')
     async def shuffle_(self, ctx):
-        """Shuffles the songs in the queue."""
-        player = await self.get_player(ctx)
-        if player.queue.empty():
+        """Shuffle the queue."""
+        player = self.get_cachy_player(ctx.guild)
+        if not player or player.queue.is_empty:
             return await ctx.send('Queue is empty.')
-        songs = []
-        while not player.queue.empty():
-            try:
-                songs.append(player.queue.get_nowait())
-            except Exception:
-                break
-        random.shuffle(songs)
-        for song in songs:
-            await player.queue.put(song)
+        player.queue.shuffle()
         await ctx.send(embed=discord.Embed(description='Shuffled', color=0xFFC0CB))
+
+    @commands.hybrid_command(name='nowplaying', aliases=['np'])
+    async def nowplaying_(self, ctx):
+        """Show currently playing song."""
+        player = self.get_cachy_player(ctx.guild)
+        if not player or not player.current:
+            return await ctx.send('Nothing playing.')
+        track = player.current
+        embed = discord.Embed(color=0xFFC0CB)
+        if track.artwork:
+            embed.set_image(url=track.artwork)
+        await ctx.send(embed=embed)
 
 
 async def setup(bot):
