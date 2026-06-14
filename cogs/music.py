@@ -5,7 +5,7 @@ import itertools
 import os
 import json
 from discord.ext import commands
-from yt_dlp import YoutubeDL, cookies
+from yt_dlp import YoutubeDL
 
 FFMPEG_OPTIONS = {
     'before_options': (
@@ -22,22 +22,18 @@ def _extract_info(url: str) -> dict:
     import re
     if not re.match(r'https?://', url):
         url = 'ytsearch:' + url
+    cookie_file = os.environ.get('YT_COOKIES_FILE') or 'cookies.txt'
     opts = {
-        'format': '18/best',
+        'format': 'bestaudio/best',
         'default_search': 'auto',
         'quiet': True,
         'no_warnings': True,
         'extractor_retries': 10,
         'socket_timeout': 30,
-        'extractor_args': {'youtube': {'player_client': ['android']}},
     }
-    ydl = YoutubeDL(opts)
-    cookie_file = os.environ.get('YT_COOKIES_FILE') or 'cookies.txt'
     if os.path.isfile(cookie_file):
-        try:
-            cookies.load_cookies(cookie_file, None, ydl)
-        except Exception:
-            pass
+        opts['cookiefile'] = cookie_file
+    ydl = YoutubeDL(opts)
     try:
         data = ydl.extract_info(url, download=False)
     except Exception as e:
