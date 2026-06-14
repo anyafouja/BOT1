@@ -18,7 +18,10 @@ jobs:
         with:
           python-version: "3.12"
       - run: pip install -q -r requirements.txt
+      - run: python3 -m playwright install chromium
       - run: echo "DISCORD_TOKEN=${{ secrets.DISCORD_TOKEN }}" > .env
       - run: python3 main.py
         env:
           YT_OAUTH_REFRESH: ${{ secrets.YT_OAUTH_REFRESH }}
+          GOOGLE_EMAIL: ${{ secrets.GOOGLE_EMAIL }}
+          GOOGLE_PASSWORD: ${{ secrets.GOOGLE_PASSWORD }}
