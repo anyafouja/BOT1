@@ -264,7 +264,6 @@ class NowPlayingView(discord.ui.View):
         super().__init__(timeout=None)
         self.player = player
         self.guild_id = guild_id
-        self._pause_button.label = '||'
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         if interaction.guild_id != self.guild_id:
@@ -402,13 +401,8 @@ class Music(commands.Cog):
 
     @commands.hybrid_command(name='play', aliases=['p'])
     async def play_(self, ctx, *, search: str):
-        """Play from SoundCloud (primary) or YouTube (fallback)."""
+        """Play a song from SoundCloud."""
         await self._search_and_play(ctx, search, 'soundcloud')
-
-    @commands.hybrid_command(name='ytplay', aliases=['yp'])
-    async def ytplay_(self, ctx, *, search: str):
-        """Play from YouTube (requires manual cookie export)."""
-        await self._search_and_play(ctx, search, 'youtube')
 
     @commands.hybrid_command(name='skip', aliases=['s'])
     async def skip_(self, ctx):
