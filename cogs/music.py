@@ -142,12 +142,8 @@ async def get_audio_url(video_id: str) -> str | None:
 
     sd = data.get('streamingData') or {}
     if not sd:
-        keys = list(data.keys())[:10]
-        _last_youtube_error = f'No streamingData in response. Keys: {keys}'
-        if 'responseContext' in data:
-            sv = data['responseContext'].get('serviceTrackingParams', [])
-            if sv:
-                _last_youtube_error += f' serviceTracking: {len(sv)} entries'
+        ps = data.get('playabilityStatus', {})
+        _last_youtube_error = f'No streamingData. playabilityStatus: {json.dumps(ps)}'
         return None
 
     fmts = sd.get('adaptiveFormats', []) + sd.get('formats', [])
