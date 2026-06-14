@@ -6,8 +6,8 @@ from discord.ext import commands
 
 
 YTDL_OPTS = {
-    'format': '18',
-    'extractor_args': {'youtube': {'player_client': ['android']}},
+    'format': '251/18/bestaudio',
+    'extractor_args': {'youtube': {'player_client': ['tv', 'web', 'android']}},
     'quiet': True,
     'no_warnings': True,
     'no_color': True,
