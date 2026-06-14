@@ -106,17 +106,24 @@ def _invidious_get_video(video_id: str) -> dict:
     }
 
 
-def _piped_api(endpoint: str, instance_idx: int = 0) -> dict:
-    """Query Piped API with fallback to other instances."""
+def _piped_api(endpoint: str, instance_idx: int = 0, tried_instances: list = None) -> tuple:
+    """Query Piped API with fallback. Returns (data, working_instance_idx)."""
+    if tried_instances is None:
+        tried_instances = []
+    
     for i in range(len(PIPED_INSTANCES)):
         idx = (instance_idx + i) % len(PIPED_INSTANCES)
+        if idx in tried_instances:
+            continue
         instance = PIPED_INSTANCES[idx]
         try:
             url = f'https://{instance}{endpoint}'
             req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
             with urllib.request.urlopen(req, timeout=10) as response:
-                return json.loads(response.read().decode())
+                data = json.loads(response.read().decode())
+                return (data, idx)  # Return data AND working instance index
         except Exception:
+            tried_instances.append(idx)
             continue
     raise RuntimeError('All Piped instances failed')
 
@@ -124,18 +131,19 @@ def _piped_api(endpoint: str, instance_idx: int = 0) -> dict:
 def _piped_search(query: str) -> dict:
     """Search YouTube via Piped and return first result."""
     endpoint = f'/search?q={urllib.parse.quote(query)}&filter=music_songs'
-    data = _piped_api(endpoint)
+    data, working_idx = _piped_api(endpoint)  # Get working instance index
     items = data.get('items', [])
     if not items:
         raise RuntimeError('No search results')
     video = items[0]
-    return _piped_get_video(video['url'].split('=')[-1])
+    # Use SAME instance for get_video
+    return _piped_get_video(video['url'].split('=')[-1], instance_idx=working_idx)
 
 
-def _piped_get_video(video_id: str) -> dict:
-    """Get video info from Piped and convert to yt-dlp format."""
+def _piped_get_video(video_id: str, instance_idx: int = 0) -> dict:
+    """Get video info from Piped using specific instance."""
     endpoint = f'/streams/{video_id}'
-    data = _piped_api(endpoint)
+    data, _ = _piped_api(endpoint, instance_idx=instance_idx)  # Use specified instance
     
     # Find best audio stream
     audio_streams = data.get('audioStreams', [])
