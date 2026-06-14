@@ -22,21 +22,18 @@ def _extract_info(url: str) -> dict:
     import re
     if not re.match(r'https?://', url):
         url = 'ytsearch:' + url
-    cookie_file = os.environ.get('YT_COOKIES_FILE') or 'cookies.txt'
-    if not os.path.isfile(cookie_file):
-        cookie_file = None
     opts = {
-        'format': 'bestaudio',
+        'format': '18/best',
         'default_search': 'auto',
         'quiet': True,
         'no_warnings': True,
         'extractor_retries': 10,
-        'file_access_retries': 5,
-        'fragment_retries': 5,
         'socket_timeout': 30,
+        'extractor_args': {'youtube': {'player_client': ['android']}},
     }
     ydl = YoutubeDL(opts)
-    if cookie_file:
+    cookie_file = os.environ.get('YT_COOKIES_FILE') or 'cookies.txt'
+    if os.path.isfile(cookie_file):
         try:
             cookies.load_cookies(cookie_file, None, ydl)
         except Exception:
