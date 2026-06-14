@@ -3,44 +3,35 @@ set -euo pipefail
 
 LAVALINK_JAR="Lavalink.jar"
 LAVALINK_URL="https://github.com/lavalink-devs/Lavalink/releases/download/4.2.2/Lavalink.jar"
+CONFIG_URL="https://raw.githubusercontent.com/anyafouja/CachyMusic/main/application.yml"
 
 if [ ! -f "$LAVALINK_JAR" ]; then
   echo "Downloading Lavalink..."
   curl -sL "$LAVALINK_URL" -o "$LAVALINK_JAR"
 fi
 
-cat > application.yml <<'YAML'
-server:
-  port: 2333
-  address: 0.0.0.0
-lavalink:
-  plugins:
-    - dependency: "dev.lavalink.youtube:youtube-plugin:1.18.1"
-      snapshot: false
-  server:
-    password: youshallnotpass
-    sources:
-      youtube: false
-    bufferDurationMs: 400
-    playerUpdateInterval: 5
-    youtubeSearchEnabled: true
-plugins:
-  youtube:
-    enabled: true
-    allowSearch: true
-    oauth:
-      enabled: true
-    clients:
-      - TV
-logging:
-  level:
-    root: INFO
-    lavalink: INFO
-    dev.lavalink.youtube.http.YoutubeOauth2Handler: INFO
-YAML
+echo "Downloading full config from repo..."
+curl -sL "$CONFIG_URL" > application-oauth.yml
 
-echo "Starting Lavalink..."
+# Patch config: enable OAuth without skipInitialization, use TV client only
+python3 -c "
+import yaml
+with open('application-oauth.yml') as f:
+    data = yaml.safe_load(f)
+plugins = data.setdefault('plugins', {})
+yt = plugins.setdefault('youtube', {})
+yt['enabled'] = True
+yt['allowSearch'] = True
+yt['oauth'] = {'enabled': True}
+yt['clients'] = ['TV']
+with open('application-oauth.yml', 'w') as f:
+    yaml.dump(data, f, default_flow_style=False)
+print('Config patched for OAuth')
+"
+
+echo ""
+echo "Starting Lavalink with OAuth..."
 echo "When OAuth URL appears, open it in browser, login, enter code."
 echo ""
 
-java -jar "$LAVALINK_JAR"
+java -jar "$LAVALINK_JAR" --spring.config.additional-location=application-oauth.yml
