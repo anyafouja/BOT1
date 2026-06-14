@@ -95,12 +95,15 @@ def _invidious_get_video(video_id: str) -> dict:
     best_audio = max(audio_formats, key=lambda f: f.get('bitrate', 0))
     
     # Convert to yt-dlp format
+    thumb = data.get('videoThumbnails', [{}])[0].get('url')
+    if not thumb or not thumb.startswith('http'):
+        thumb = f'https://img.youtube.com/vi/{video_id}/maxresdefault.jpg'
     return {
         'id': data.get('videoId'),
         'title': data.get('title'),
         'url': best_audio.get('url'),
         'webpage_url': f'https://www.youtube.com/watch?v={video_id}',
-        'thumbnail': data.get('videoThumbnails', [{}])[0].get('url'),
+        'thumbnail': thumb,
         'duration': data.get('lengthSeconds'),
         'ext': 'webm' if 'webm' in best_audio.get('type', '') else 'm4a',
     }
@@ -154,12 +157,15 @@ def _piped_get_video(video_id: str, instance_idx: int = 0) -> dict:
     best_audio = max(audio_streams, key=lambda s: s.get('bitrate', 0))
     
     # Convert to yt-dlp format
+    thumbnail = data.get('thumbnailUrl')
+    if not thumbnail or not thumbnail.startswith('http'):
+        thumbnail = f'https://img.youtube.com/vi/{video_id}/maxresdefault.jpg'
     return {
         'id': video_id,
         'title': data.get('title'),
         'url': best_audio.get('url'),
         'webpage_url': f'https://www.youtube.com/watch?v={video_id}',
-        'thumbnail': data.get('thumbnailUrl'),
+        'thumbnail': thumbnail,
         'duration': data.get('duration'),
         'ext': best_audio.get('format', 'webm').lower(),
     }
@@ -356,6 +362,7 @@ class MusicPlayer:
                 embed = discord.Embed(title=source.title, color=0xFFC0CB)
                 if source.thumbnail:
                     embed.set_image(url=source.thumbnail)
+                    embed.set_thumbnail(url=source.thumbnail)
                 if self.np:
                     try:
                         await self.np.delete()
