@@ -133,6 +133,7 @@ class Music(commands.Cog):
                         pass
                     player = await ctx.author.voice.channel.connect(cls=CachyPlayer)
                     player.inactive_timeout = 60
+                    await player.set_volume(500)
                     player.text_channel = ctx.channel
                 else:
                     raise RuntimeError('Not connected to a voice channel.')
