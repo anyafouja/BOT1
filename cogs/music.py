@@ -1,17 +1,156 @@
 import asyncio
 import discord
-import yt_dlp
+import json
+import os
+import re
+import time
+import aiohttp
 from collections import deque
 from discord.ext import commands
 
 
-YTDL_OPTS = {
-    'format': '251/18/bestaudio',
-    'extractor_args': {'youtube': {'player_client': ['tv', 'web', 'android']}},
-    'quiet': True,
-    'no_warnings': True,
-    'no_color': True,
-}
+YT_OAUTH_REFRESH = os.getenv('YT_OAUTH_REFRESH', '')
+INNERTUBE_KEY = 'AIzaSyAO_FJ2SlqU8Q4STEHLGCilw_Y9_11qcW8'
+INNERTUBE_API = 'https://www.youtube.com/youtubei/v1/player?key=' + INNERTUBE_KEY
+OAUTH_TOKEN_URL = 'https://oauth2.googleapis.com/token'
+CLIENT_ID = '861556708454-d6dlm3lh05idd8npek18k6kk8i3f4lds.apps.googleusercontent.com'
+CLIENT_SECRET = 'SboVhoG9s0rNafixCSGGKXAT'
+
+_oauth_token: str | None = None
+_oauth_expiry: float = 0
+
+
+async def refresh_oauth_token() -> str | None:
+    global _oauth_token, _oauth_expiry
+    rt = YT_OAUTH_REFRESH
+    if not rt:
+        return None
+    if _oauth_token and time.time() < _oauth_expiry:
+        return _oauth_token
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.post(OAUTH_TOKEN_URL, data={
+                'client_id': CLIENT_ID,
+                'client_secret': CLIENT_SECRET,
+                'refresh_token': rt,
+                'grant_type': 'refresh_token',
+            }) as resp:
+                data = await resp.json()
+                _oauth_token = data.get('access_token')
+                _oauth_expiry = time.time() + data.get('expires_in', 3600) - 60
+                return _oauth_token
+    except Exception:
+        return None
+
+
+async def search_youtube(query: str) -> list[dict]:
+    async with aiohttp.ClientSession() as session:
+        payload = {
+            'context': {
+                'client': {
+                    'clientName': 'WEB',
+                    'clientVersion': '2.20240101.00.00',
+                }
+            },
+            'query': query,
+        }
+        async with session.post(
+            'https://www.youtube.com/youtubei/v1/search?key=' + INNERTUBE_KEY,
+            json=payload
+        ) as resp:
+            data = await resp.json()
+
+    results = []
+    contents = (
+        data.get('contents', {})
+        .get('twoColumnSearchResultsRenderer', {})
+        .get('primaryContents', {})
+        .get('sectionListRenderer', {})
+        .get('contents', [])
+    )
+    for section in contents:
+        items = section.get('itemSectionRenderer', {}).get('contents', [])
+        for item in items:
+            vr = item.get('videoRenderer', {})
+            if not vr:
+                continue
+            vid = vr.get('videoId', '')
+            if not vid:
+                continue
+            title_runs = vr.get('title', {}).get('runs', [])
+            title = ''.join(r.get('text', '') for r in title_runs)
+            thumb = ''
+            thumbs = vr.get('thumbnail', {}).get('thumbnails', [])
+            if thumbs:
+                thumb = thumbs[-1].get('url', '')
+            duration = 0
+            dur_str = vr.get('lengthText', {}).get('simpleText', '')
+            if dur_str:
+                parts = list(map(int, re.findall(r'\d+', dur_str)))
+                if len(parts) == 3:
+                    duration = parts[0] * 3600 + parts[1] * 60 + parts[2]
+                elif len(parts) == 2:
+                    duration = parts[0] * 60 + parts[1]
+                elif len(parts) == 1:
+                    duration = parts[0]
+            author = ''
+            owner = vr.get('ownerText', {}).get('runs', [])
+            if owner:
+                author = owner[0].get('text', '')
+            results.append({
+                'id': vid,
+                'title': title,
+                'thumbnail': thumb,
+                'duration': duration,
+                'author': author,
+                'webpage_url': f'https://youtube.com/watch?v={vid}',
+            })
+    return results
+
+
+async def get_audio_url(video_id: str) -> str | None:
+    token = await refresh_oauth_token()
+    if not token:
+        return None
+
+    async with aiohttp.ClientSession() as session:
+        payload = {
+            'context': {
+                'client': {
+                    'clientName': 'TVHTML5',
+                    'clientVersion': '7.20201028',
+                }
+            },
+            'videoId': video_id,
+        }
+        headers = {'Authorization': f'Bearer {token}'}
+        async with session.post(INNERTUBE_API, json=payload, headers=headers) as resp:
+            data = await resp.json()
+
+    # Try adaptiveFormats first (audio-only), then formats
+    fmts = data.get('streamingData', {}).get('adaptiveFormats', [])
+    fmts += data.get('streamingData', {}).get('formats', [])
+
+    # Prefer audio-only: opus > m4a > any audio
+    def sort_key(f):
+        mt = f.get('mimeType', '')
+        score = 0
+        if 'opus' in mt: score = 3
+        elif 'mp4a' in mt or 'm4a' in mt: score = 2
+        elif 'audio' in mt: score = 1
+        return score
+
+    fmts.sort(key=sort_key, reverse=True)
+
+    for f in fmts:
+        url = f.get('url', '')
+        if url and ('audio' in f.get('mimeType', '') or 'opus' in f.get('mimeType', '')):
+            return url
+    for f in fmts:
+        url = f.get('url', '')
+        if url:
+            return url
+    return None
 
 
 class Track:
@@ -21,15 +160,13 @@ class Track:
         self.uri = data.get('webpage_url', f'https://youtube.com/watch?v={self.id}')
         self.artwork = data.get('thumbnail', '')
         self.duration = data.get('duration', 0)
-        self.author = data.get('uploader', 'Unknown')
+        self.author = data.get('author', 'Unknown')
         self._url = None
 
-    async def get_url(self) -> str:
+    async def get_url(self) -> str | None:
         if self._url:
             return self._url
-        loop = asyncio.get_event_loop()
-        info = await loop.run_in_executor(None, lambda: yt_dlp.YoutubeDL(YTDL_OPTS).extract_info(self.uri, download=False))
-        self._url = info.get('url', '')
+        self._url = await get_audio_url(self.id)
         return self._url
 
 
@@ -45,7 +182,6 @@ class MusicPlayer:
         self.history: deque[Track] = deque(maxlen=20)
         self.np_message: discord.Message | None = None
         self.text_channel = ctx.channel
-        self._playing = asyncio.Event()
         self._paused = False
         self._stop = False
 
@@ -63,7 +199,6 @@ class MusicPlayer:
         except Exception:
             pass
         self.vc = await channel.connect()
-        self.vc.inactive_timeout = 60
 
     async def disconnect(self) -> None:
         self._stop = True
@@ -306,34 +441,21 @@ class Music(commands.Cog):
             await ctx.send(str(e))
             return
 
-        loop = asyncio.get_event_loop()
         try:
-            with yt_dlp.YoutubeDL({**YTDL_OPTS, 'extract_flat': True}) as ydl:
-                data = await loop.run_in_executor(None, lambda: ydl.extract_info(f'ytsearch:{search}', download=False))
+            results = await search_youtube(search)
         except Exception as e:
             await ctx.send(f'Search failed: {e}')
             return
 
-        entries = data.get('entries', [])
-        if not entries:
+        if not results:
             await ctx.send('No results found.')
             return
 
-        tracks = []
-        for entry in entries:
-            if entry:
-                tracks.append(Track(entry))
-
-        if isinstance(data, dict) and data.get('_type') == 'playlist' or len(tracks) > 1:
-            for t in tracks:
-                await player.enqueue(t)
-            embed = discord.Embed(description=f'Added {len(tracks)} songs from **{search}**', color=0xFFC0CB)
-            await ctx.send(embed=embed)
-        else:
-            track = tracks[0]
-            await player.enqueue(track)
-            embed = discord.Embed(description=f'[{track.title}]({track.uri})', color=0xFFC0CB)
-            await ctx.send(embed=embed)
+        tracks = [Track(r) for r in results]
+        track = tracks[0]
+        await player.enqueue(track)
+        embed = discord.Embed(description=f'[{track.title}]({track.uri})', color=0xFFC0CB)
+        await ctx.send(embed=embed)
 
         if not player.is_playing and not player.is_paused:
             await player.start()
@@ -382,11 +504,9 @@ class Music(commands.Cog):
         player = self.bot.voice_players.get(ctx.guild.id)
         if not player:
             return await ctx.send('Queue is empty.')
-
         upcoming = player.get_queue()
         if not upcoming:
             return await ctx.send('Queue is empty.')
-
         track_count = len(upcoming)
         max_tracks = 10
         lines = []
@@ -394,7 +514,6 @@ class Music(commands.Cog):
             lines.append(f'**{i}.** {t.title}')
         if track_count > max_tracks:
             lines.append(f'*... and {track_count - max_tracks} more*')
-
         embed = discord.Embed(title=f'Queue ({track_count})', description='\n'.join(lines), color=0xFFC0CB)
         await ctx.send(embed=embed)
 
