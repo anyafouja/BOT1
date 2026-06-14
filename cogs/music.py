@@ -22,17 +22,21 @@ def _extract_info(url: str) -> dict:
     import re
     if not re.match(r'https?://', url):
         url = 'ytsearch:' + url
-    cmd = ['yt-dlp', '--remote-components', 'ejs:github', '--js-runtimes', 'deno', '--extractor-args', 'youtube:player_client=android', '-j', url]
     cookies = os.environ.get('YT_COOKIES_FILE') or 'cookies.txt'
-    if os.path.isfile(cookies):
-        cmd.extend(['--cookies', cookies])
+    cookie_args = ['--cookies', cookies] if os.path.isfile(cookies) else []
+    cmd = ['yt-dlp', *cookie_args, '-f', 'bestaudio[ext=webm]/bestaudio', '-g', '-j', '--no-playlist', '--quiet', url]
     try:
         out = subprocess.check_output(cmd, text=True, timeout=30, stderr=subprocess.PIPE)
     except subprocess.CalledProcessError as e:
         raise RuntimeError(e.stderr.strip() or str(e))
-    data = json.loads(out)
+    lines = out.strip().split('\n')
+    json_line = next((l for l in lines if l.startswith('{')), lines[-1] if lines else '{}')
+    data = json.loads(json_line)
     if 'entries' in data:
         data = data['entries'][0]
+    stream_url = lines[0] if lines and not lines[0].startswith('{') else None
+    if stream_url:
+        data['url'] = stream_url
     return data
 
 
@@ -53,7 +57,7 @@ class YTDLSource(discord.PCMVolumeTransformer):
 
     @classmethod
     async def from_url(cls, url: str, volume=0.5):
-        data = await asyncio.get_event_loop().run_in_executor(None, _extract_info, url)
+        data = await asyncio.get_event_loop().run_in_executor(None, lambda: _extract_info(url))
         return await cls.from_data(data, volume=volume)
 
 
