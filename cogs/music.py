@@ -10,8 +10,15 @@ from discord.ext import commands
 
 
 YT_OAUTH_REFRESH = os.getenv('YT_OAUTH_REFRESH', '')
-INNERTUBE_KEY = 'AIzaSyAO_FJ2SlqU8Q4STEHLGCilw_Y9_11qcW8'
-INNERTUBE_API = 'https://www.youtube.com/youtubei/v1/player?key=' + INNERTUBE_KEY
+INNERTUBE_KEYS = {
+    'ANDROID': 'AIzaSyA8eiZmM1FaDVjRy-df2KTyQ_vz_yYM39w',
+    'ANDROID_MUSIC': 'AIzaSyA8eiZmM1FaDVjRy-df2KTyQ_vz_yYM39w',
+    'WEB': 'AIzaSyAO_FJ2SlqU8Q4STEHLGCilw_Y9_11qcW8',
+    'WEB_REMIX': 'AIzaSyAO_FJ2SlqU8Q4STEHLGCilw_Y9_11qcW8',
+    'TVHTML5': 'AIzaSyAO_FJ2SlqU8Q4STEHLGCilw_Y9_11qcW8',
+    'IOS': 'AIzaSyB-63vPrdThhKuerbB2N_l7Kwwcxj6yUAc',
+}
+INNERTUBE_API = 'https://www.youtube.com/youtubei/v1/player?key='
 OAUTH_TOKEN_URL = 'https://www.youtube.com/o/oauth2/token'
 CLIENT_ID = '861556708454-d6dlm3lh05idd8npek18k6be8ba3oc68.apps.googleusercontent.com'
 CLIENT_SECRET = 'SboVhoG9s0rNafixCSGGKXAT'
@@ -59,7 +66,7 @@ async def search_youtube(query: str) -> list[dict]:
             'query': query,
         }
         async with session.post(
-            'https://www.youtube.com/youtubei/v1/search?key=' + INNERTUBE_KEY,
+            'https://www.youtube.com/youtubei/v1/search?key=' + INNERTUBE_KEYS['WEB'],
             json=payload
         ) as resp:
             data = await resp.json()
@@ -116,14 +123,18 @@ _last_youtube_error: str | None = None
 _youtube_errors: list[str] = []
 
 INNERTUBE_CLIENTS = [
-    {'clientName': 'ANDROID', 'clientVersion': '19.09.37'},
-    {'clientName': 'ANDROID_MUSIC', 'clientVersion': '6.27.54'},
+    {'clientName': 'ANDROID', 'clientVersion': '19.45.38'},
+    {'clientName': 'ANDROID_MUSIC', 'clientVersion': '6.42.11'},
+    {'clientName': 'IOS', 'clientVersion': '19.45.38'},
     {'clientName': 'WEB_REMIX', 'clientVersion': '1.20240304.00.00'},
     {'clientName': 'WEB', 'clientVersion': '2.20240101.00.00'},
     {'clientName': 'TVHTML5', 'clientVersion': '7.20201028'},
 ]
 
 async def _try_player(video_id: str, client: dict, token: str | None = None) -> dict:
+    cn = client['clientName']
+    key = INNERTUBE_KEYS.get(cn, INNERTUBE_KEYS['WEB'])
+    url = INNERTUBE_API + key
     payload = {
         'context': {'client': client},
         'videoId': video_id,
@@ -132,7 +143,7 @@ async def _try_player(video_id: str, client: dict, token: str | None = None) -> 
     if token:
         headers['Authorization'] = f'Bearer {token}'
     async with aiohttp.ClientSession() as session:
-        async with session.post(INNERTUBE_API, json=payload, headers=headers) as resp:
+        async with session.post(url, json=payload, headers=headers) as resp:
             return await resp.json()
 
 
