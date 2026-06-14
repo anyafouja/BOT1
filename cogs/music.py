@@ -149,9 +149,7 @@ class MusicPlayer:
             view = NowPlayingView(self, self._guild.id)
 
             try:
-                embed = discord.Embed(color=0xFFC0CB)
-                if source.thumbnail:
-                    embed.set_image(url=source.thumbnail)
+                embed = discord.Embed(title=source.title, color=0xFFC0CB)
                 if self.np:
                     try:
                         await self.np.delete()
@@ -310,7 +308,7 @@ class Music(commands.Cog):
 
     @commands.hybrid_command(name='play', aliases=['p'])
     async def play_(self, ctx, *, search: str):
-        """Plays a song from YouTube."""
+        """Plays a song from SoundCloud."""
         async with ctx.typing():
             vc = ctx.voice_client
             if not vc:
@@ -407,6 +405,27 @@ class Music(commands.Cog):
         if vc.source:
             vc.source.volume = vol / 100
         await ctx.send(embed=discord.Embed(description=f'Volume: {vol}%', color=0xFFC0CB))
+
+    @commands.hybrid_command(name='help')
+    async def help_(self, ctx):
+        """Shows all commands."""
+        cmds = [
+            ('play <query>', 'Plays a song from SoundCloud'),
+            ('skip', 'Skips the current song'),
+            ('stop', 'Stops playback and disconnects'),
+            ('pause', 'Pauses playback'),
+            ('resume', 'Resumes playback'),
+            ('volume <1-100>', 'Sets the volume'),
+            ('queue', 'Shows the song queue'),
+            ('clear-queue', 'Clears all queued songs'),
+            ('shuffle', 'Shuffles the queue'),
+            ('loop', 'Toggles loop mode'),
+            ('ping', 'Checks bot latency'),
+        ]
+        embed = discord.Embed(title='Cachy Music', color=0xFFC0CB)
+        embed.description = '\n\n'.join(f'**cachy {cmd}**\n{desc}' for cmd, desc in cmds)
+        embed.set_footer(text='Powered by SoundCloud')
+        await ctx.send(embed=embed)
 
     @commands.hybrid_command(name='ping')
     async def ping_(self, ctx):
