@@ -22,10 +22,7 @@ def _extract_info(url: str) -> dict:
     import re
     if not re.match(r'https?://', url):
         url = 'ytsearch:' + url
-    cmd = ['yt-dlp', '--remote-components', 'ejs:github', '--js-runtimes', 'deno', '--extractor-args', 'youtube:player_client=tv', '-j', url]
-    cookies = os.environ.get('YT_COOKIES_FILE') or 'cookies.txt'
-    if os.path.isfile(cookies):
-        cmd.extend(['--cookies', cookies])
+    cmd = ['yt-dlp', '--remote-components', 'ejs:github', '--js-runtimes', 'deno', '--extractor-args', 'youtube:player_client=tv', '--no-cookies', '-j', url]
     try:
         out = subprocess.check_output(cmd, text=True, timeout=30, stderr=subprocess.PIPE)
     except subprocess.CalledProcessError as e:
