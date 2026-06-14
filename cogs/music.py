@@ -19,15 +19,12 @@ FFMPEG_OPTIONS = {
 
 
 def _extract_info(url: str) -> dict:
-    import re
+    import re, tempfile, os
     if not re.match(r'https?://', url):
         url = 'scsearch:' + url
     cmd = [
-        'yt-dlp',
-        '-f', 'bestaudio',
-        '-j',
-        '--no-playlist',
-        '--quiet', url,
+        'yt-dlp', '-f', 'bestaudio', '-j',
+        '--no-playlist', '--quiet', url,
     ]
     try:
         out = subprocess.check_output(cmd, text=True, timeout=30, stderr=subprocess.PIPE)
@@ -36,6 +33,15 @@ def _extract_info(url: str) -> dict:
     data = json.loads(out.strip())
     if 'entries' in data:
         data = data['entries'][0]
+    webpage_url = data.get('webpage_url') or data.get('url', url)
+    fd, path = tempfile.mkstemp(suffix='.m4a')
+    os.close(fd)
+    subprocess.check_call([
+        'yt-dlp', '-f', 'http_mp3_0_0',
+        '-o', path, '--no-playlist', '--quiet', webpage_url,
+    ], timeout=120, stderr=subprocess.PIPE)
+    data['url'] = path
+    data['_tmpfile'] = path
     return data
 
 
@@ -47,6 +53,15 @@ class YTDLSource(discord.PCMVolumeTransformer):
         self.url = data.get('url')
         self.thumbnail = data.get('thumbnail')
         self.webpage_url = data.get('webpage_url')
+        self._tmpfile = data.get('_tmpfile')
+
+    def cleanup(self):
+        import os
+        if self._tmpfile and os.path.isfile(self._tmpfile):
+            try:
+                os.remove(self._tmpfile)
+            except Exception:
+                pass
 
     @classmethod
     async def from_data(cls, data: dict, volume=0.5):
