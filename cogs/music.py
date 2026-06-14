@@ -114,63 +114,77 @@ async def search_youtube(query: str) -> list[dict]:
 
 _last_youtube_error: str | None = None
 
+INNERTUBE_CLIENTS = [
+    {'clientName': 'ANDROID', 'clientVersion': '19.09.37'},
+    {'clientName': 'ANDROID_MUSIC', 'clientVersion': '6.27.54'},
+    {'clientName': 'WEB_REMIX', 'clientVersion': '1.20240304.00.00'},
+    {'clientName': 'WEB', 'clientVersion': '2.20240101.00.00'},
+    {'clientName': 'TVHTML5', 'clientVersion': '7.20201028'},
+]
+
+async def _try_player(video_id: str, client: dict, token: str | None = None) -> dict | None:
+    payload = {
+        'context': {'client': client},
+        'videoId': video_id,
+    }
+    headers = {}
+    if token:
+        headers['Authorization'] = f'Bearer {token}'
+    async with aiohttp.ClientSession() as session:
+        async with session.post(INNERTUBE_API, json=payload, headers=headers) as resp:
+            return await resp.json()
+
+
 async def get_audio_url(video_id: str) -> str | None:
     global _last_youtube_error
+
     token = await refresh_oauth_token()
-    if not token:
-        _last_youtube_error = 'OAuth token refresh returned no token'
-        return None
 
-    async with aiohttp.ClientSession() as session:
-        payload = {
-            'context': {
-                'client': {
-                    'clientName': 'TVHTML5',
-                    'clientVersion': '7.20201028',
-                }
-            },
-            'videoId': video_id,
-        }
-        headers = {'Authorization': f'Bearer {token}'}
-        async with session.post(INNERTUBE_API, json=payload, headers=headers) as resp:
-            data = await resp.json()
+    for client in INNERTUBE_CLIENTS:
+        cn = client['clientName']
+        data = await _try_player(video_id, client, token if cn == 'TVHTML5' else None)
 
-    api_err = data.get('error')
-    if api_err:
-        _last_youtube_error = f'InnerTube player error: {api_err}'
-        return None
+        api_err = data.get('error')
+        if api_err:
+            _last_youtube_error = f'{cn} error: {api_err}'
+            continue
 
-    sd = data.get('streamingData') or {}
-    if not sd:
         ps = data.get('playabilityStatus', {})
-        _last_youtube_error = f'No streamingData. playabilityStatus: {json.dumps(ps)}'
-        return None
+        if ps.get('status') != 'OK':
+            _last_youtube_error = f'{cn}: {ps.get("status")} - {ps.get("reason", "")}'
+            continue
 
-    fmts = sd.get('adaptiveFormats', []) + sd.get('formats', [])
+        sd = data.get('streamingData')
+        if not sd:
+            _last_youtube_error = f'{cn}: no streamingData'
+            continue
 
-    if not fmts:
-        _last_youtube_error = 'No formats in streamingData'
-        return None
+        fmts = sd.get('adaptiveFormats', []) + sd.get('formats', [])
+        if not fmts:
+            _last_youtube_error = f'{cn}: no formats'
+            continue
 
-    def sort_key(f):
-        mt = f.get('mimeType', '')
-        score = 0
-        if 'opus' in mt: score = 3
-        elif 'mp4a' in mt or 'm4a' in mt: score = 2
-        elif 'audio' in mt: score = 1
-        return score
+        def sort_key(f):
+            mt = f.get('mimeType', '')
+            score = 0
+            if 'opus' in mt: score = 3
+            elif 'mp4a' in mt or 'm4a' in mt: score = 2
+            elif 'audio' in mt: score = 1
+            return score
 
-    fmts.sort(key=sort_key, reverse=True)
+        fmts.sort(key=sort_key, reverse=True)
 
-    for f in fmts:
-        url = f.get('url', '')
-        if url and ('audio' in f.get('mimeType', '') or 'opus' in f.get('mimeType', '')):
-            return url
-    for f in fmts:
-        url = f.get('url', '')
-        if url:
-            return url
-    _last_youtube_error = f'No usable URL in {len(fmts)} formats'
+        for f in fmts:
+            url = f.get('url', '')
+            if url and ('audio' in f.get('mimeType', '') or 'opus' in f.get('mimeType', '')):
+                return url
+        for f in fmts:
+            url = f.get('url', '')
+            if url:
+                return url
+
+        _last_youtube_error = f'{cn}: no usable URL in {len(fmts)} formats'
+
     return None
 
 
