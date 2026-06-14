@@ -41,10 +41,11 @@ jobs:
             echo "Waiting for Lavalink... ($i)"
             sleep 2
           done
-          echo "--- lavalink.log ---"
-          tail -30 lavalink.log 2>/dev/null || echo "(no lavalink.log)"
+          echo "--- lavalink.log (first 50 lines) ---"
+          head -50 lavalink.log 2>/dev/null || echo "(no lavalink.log)"
+          echo "--- lavalink.log (last 20 lines) ---"
+          tail -20 lavalink.log 2>/dev/null || true
       - run: |
           ps aux | grep -i lava | grep -v grep
-          tail -20 lavalink.log 2>/dev/null || true
           echo "=== Starting bot ==="
           python3 main.py

@@ -61,3 +61,4 @@ logging:
   level:
     root: INFO
     lavalink: INFO
+    dev.lavalink.youtube: DEBUG
