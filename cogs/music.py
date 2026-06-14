@@ -12,8 +12,8 @@ from discord.ext import commands
 YT_OAUTH_REFRESH = os.getenv('YT_OAUTH_REFRESH', '')
 INNERTUBE_KEY = 'AIzaSyAO_FJ2SlqU8Q4STEHLGCilw_Y9_11qcW8'
 INNERTUBE_API = 'https://www.youtube.com/youtubei/v1/player?key=' + INNERTUBE_KEY
-OAUTH_TOKEN_URL = 'https://oauth2.googleapis.com/token'
-CLIENT_ID = '861556708454-d6dlm3lh05idd8npek18k6kk8i3f4lds.apps.googleusercontent.com'
+OAUTH_TOKEN_URL = 'https://www.youtube.com/o/oauth2/token'
+CLIENT_ID = '861556708454-d6dlm3lh05idd8npek18k6be8ba3oc68.apps.googleusercontent.com'
 CLIENT_SECRET = 'SboVhoG9s0rNafixCSGGKXAT'
 
 _oauth_token: str | None = None
