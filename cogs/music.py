@@ -19,48 +19,24 @@ FFMPEG_OPTIONS = {
 
 
 def _extract_info(url: str) -> dict:
-    import re, time
+    import re
     if not re.match(r'https?://', url):
-        url = 'ytsearch:' + url
-    clients = ['android_music', 'android', 'web']
-    last_err = ''
-    for client in clients:
-        for attempt in range(2):
-            try:
-                cmd = [
-                    'yt-dlp',
-                    '--remote-components', 'ejs:github',
-                    '--extractor-args', f'youtube:player_client={client}',
-                    '--extractor-args', 'youtube:skip=webpage',
-                    '-f', 'bestaudio[ext=webm]/bestaudio',
-                    '--print', 'url',
-                    '--print', 'json',
-                    '--no-playlist', '--quiet', url,
-                ]
-                out = subprocess.check_output(cmd, text=True, timeout=60, stderr=subprocess.PIPE)
-            except subprocess.CalledProcessError as e:
-                err = e.stderr.strip()
-                last_err = err or str(e)
-                if '429' in err:
-                    time.sleep(3)
-                    continue
-                if attempt == 0:
-                    time.sleep(1)
-                    continue
-                break
-            lines = [l for l in out.strip().split('\n') if l]
-            if not lines:
-                continue
-            stream_url = lines[0]
-            json_str = next((l for l in reversed(lines) if l.startswith('{')), '{}')
-            if json_str == '{}' and not stream_url:
-                continue
-            data = json.loads(json_str) if json_str != '{}' else {}
-            if 'entries' in data:
-                data = data['entries'][0]
-            data['url'] = stream_url
-            return data
-    raise RuntimeError(last_err or 'No format available')
+        url = 'scsearch:' + url
+    cmd = [
+        'yt-dlp',
+        '-f', 'bestaudio',
+        '-j',
+        '--no-playlist',
+        '--quiet', url,
+    ]
+    try:
+        out = subprocess.check_output(cmd, text=True, timeout=30, stderr=subprocess.PIPE)
+    except subprocess.CalledProcessError as e:
+        raise RuntimeError(e.stderr.strip() or str(e))
+    data = json.loads(out.strip())
+    if 'entries' in data:
+        data = data['entries'][0]
+    return data
 
 
 class YTDLSource(discord.PCMVolumeTransformer):
