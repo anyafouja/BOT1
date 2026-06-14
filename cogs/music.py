@@ -28,6 +28,13 @@ INVIDIOUS_INSTANCES = [
 PIPED_INSTANCES = [
     'pipedapi.kavin.rocks',
     'pipedapi-libre.kavin.rocks',
+    'pipedapi.pfcd.me',
+    'api.piped.privacydev.net',
+    'pipedapi.palveluntarjoaja.eu',
+    'pipedapi.aeong.one',
+    'pipedapi.leptons.xyz',
+    'pipedapi.moomoo.me',
+    'piped-api.garudalinux.org',
     'pipedapi.adminforge.de',
 ]
 
@@ -151,8 +158,13 @@ def _piped_get_video(video_id: str) -> dict:
 
 
 def _extract_info(url: str) -> dict:
-    """Extract info from URL or search query. Uses SoundCloud for searches."""
+    """Extract from YouTube with comprehensive fallbacks (Piped x10, Invidious, SoundCloud)."""
     is_search = not re.match(r'https?://', url)
+    original_query = url
+    
+    # Try YouTube first via yt-dlp
+    if is_search:
+        url = 'ytsearch:' + url
     
     opts = {
         'format': 'bestaudio/best',
@@ -162,24 +174,68 @@ def _extract_info(url: str) -> dict:
     }
     
     try:
-        if is_search:
-            # Use SoundCloud search for queries (fast & reliable)
-            search_url = 'scsearch:' + url
-        else:
-            # Direct URL - supports YouTube, SoundCloud, Bandcamp, etc.
-            search_url = url
-        
         ydl = YoutubeDL(opts)
-        data = ydl.extract_info(search_url, download=False)
-        
+        data = ydl.extract_info(url, download=False)
         if 'entries' in data:
             if not data['entries']:
-                raise RuntimeError('No results found')
+                raise RuntimeError('No results')
             data = data['entries'][0]
-        
         return data
     except Exception as e:
-        raise RuntimeError(f'Failed to extract info: {e}')
+        yt_error = str(e)
+        
+        # If YouTube blocked, try all fallbacks
+        if 'Sign in to confirm' in yt_error or 'bot' in yt_error.lower():
+            query = original_query
+            
+            # Try all 10 Piped instances
+            piped_errors = []
+            for piped_inst in PIPED_INSTANCES:
+                try:
+                    if is_search:
+                        return _piped_search(query)
+                    else:
+                        video_id = _extract_video_id(url)
+                        if video_id:
+                            return _piped_get_video(video_id)
+                except Exception as pe:
+                    piped_errors.append(f'{piped_inst}: {str(pe)[:30]}')
+                    continue
+            
+            # Try Invidious
+            try:
+                if is_search:
+                    return _invidious_search(query)
+                else:
+                    video_id = _extract_video_id(url)
+                    if video_id:
+                        return _invidious_get_video(video_id)
+            except Exception as inv_error:
+                pass
+            
+            # Last resort: SoundCloud (if search only)
+            if is_search:
+                try:
+                    sc_url = 'scsearch:' + query
+                    opts_sc = {
+                        'format': 'bestaudio/best',
+                        'quiet': True,
+                        'no_warnings': True,
+                    }
+                    ydl_sc = YoutubeDL(opts_sc)
+                    sc_data = ydl_sc.extract_info(sc_url, download=False)
+                    if 'entries' in sc_data and sc_data['entries']:
+                        return sc_data['entries'][0]
+                except Exception as sc_error:
+                    pass
+            
+            # All failed
+            raise RuntimeError(
+                f'All methods failed. YouTube blocked from GHA. '
+                f'Tried: yt-dlp, {len(PIPED_INSTANCES)} Piped instances, Invidious, SoundCloud'
+            )
+        
+        raise RuntimeError(f'Extraction failed: {yt_error}')
 
 
 class YTDLSource(discord.PCMVolumeTransformer):
@@ -553,7 +609,7 @@ class Music(commands.Cog):
     async def help_(self, ctx):
         """Shows all commands."""
         cmds = [
-            ('play <query>', 'Search & play songs from SoundCloud'),
+            ('play <query>', 'Search & play from YouTube (high quality)'),
             ('skip', 'Skips the current song'),
             ('stop', 'Stops playback and disconnects'),
             ('pause', 'Pauses playback'),
@@ -567,7 +623,7 @@ class Music(commands.Cog):
         ]
         embed = discord.Embed(title='Cachy Music', color=0xFFC0CB)
         embed.description = '\n\n'.join(f'**cachy {cmd}**\n{desc}' for cmd, desc in cmds)
-        embed.set_footer(text='Powered by SoundCloud | Supports direct URLs')
+        embed.set_footer(text='YouTube via 10+ proxy fallbacks | High quality audio')
         await ctx.send(embed=embed)
 
     @commands.hybrid_command(name='ping')
