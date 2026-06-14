@@ -354,6 +354,8 @@ class MusicPlayer:
 
             try:
                 embed = discord.Embed(title=source.title, color=0xFFC0CB)
+                if source.thumbnail:
+                    embed.set_thumbnail(url=source.thumbnail)
                 if self.np:
                     try:
                         await self.np.delete()
