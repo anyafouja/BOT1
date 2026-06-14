@@ -22,42 +22,44 @@ def _extract_info(url: str) -> dict:
     import re, time
     if not re.match(r'https?://', url):
         url = 'ytsearch:' + url
-    cookies = os.environ.get('YT_COOKIES_FILE') or 'cookies.txt'
-    cookie_args = ['--cookies', cookies] if os.path.isfile(cookies) else []
-    clients = ['android', 'android_music', 'web']
+    clients = ['android_music', 'android', 'web']
     last_err = ''
     for client in clients:
-        try:
-            cmd = [
-                'yt-dlp',
-                *cookie_args,
-                '--remote-components', 'ejs:github',
-                '--extractor-args', f'youtube:player_client={client}',
-                '-f', 'bestaudio[ext=webm]/bestaudio/best',
-                '--print', 'url',
-                '--print', 'json',
-                '--no-playlist', '--quiet', url,
-            ]
-            out = subprocess.check_output(cmd, text=True, timeout=45, stderr=subprocess.PIPE)
-        except subprocess.CalledProcessError as e:
-            err = e.stderr.strip()
-            last_err = err or str(e)
-            if '429' in err:
-                time.sleep(3)
+        for attempt in range(2):
+            try:
+                cmd = [
+                    'yt-dlp',
+                    '--remote-components', 'ejs:github',
+                    '--extractor-args', f'youtube:player_client={client},youtube:skip=webpage',
+                    '--throttled-rate', '100',
+                    '-f', 'bestaudio[ext=webm]/bestaudio/best',
+                    '--print', 'url',
+                    '--print', 'json',
+                    '--no-playlist', '--quiet', url,
+                ]
+                out = subprocess.check_output(cmd, text=True, timeout=60, stderr=subprocess.PIPE)
+            except subprocess.CalledProcessError as e:
+                err = e.stderr.strip()
+                last_err = err or str(e)
+                if '429' in err:
+                    time.sleep(3)
+                    continue
+                if attempt == 0:
+                    time.sleep(1)
+                    continue
+                break
+            lines = [l for l in out.strip().split('\n') if l]
+            if not lines:
                 continue
-            continue
-        lines = [l for l in out.strip().split('\n') if l]
-        if not lines:
-            continue
-        stream_url = lines[0]
-        json_str = next((l for l in reversed(lines) if l.startswith('{')), '{}')
-        if json_str == '{}' and not stream_url:
-            continue
-        data = json.loads(json_str) if json_str != '{}' else {}
-        if 'entries' in data:
-            data = data['entries'][0]
-        data['url'] = stream_url
-        return data
+            stream_url = lines[0]
+            json_str = next((l for l in reversed(lines) if l.startswith('{')), '{}')
+            if json_str == '{}' and not stream_url:
+                continue
+            data = json.loads(json_str) if json_str != '{}' else {}
+            if 'entries' in data:
+                data = data['entries'][0]
+            data['url'] = stream_url
+            return data
     raise RuntimeError(last_err or 'No format available')
 
 
