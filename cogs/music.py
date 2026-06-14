@@ -4,6 +4,9 @@ import random
 import itertools
 import os
 import json
+import re
+import urllib.request
+import urllib.parse
 from discord.ext import commands
 from yt_dlp import YoutubeDL
 from yt_dlp.networking.impersonate import ImpersonateTarget
@@ -18,11 +21,84 @@ FFMPEG_OPTIONS = {
     'options': '-vn',
 }
 
+INVIDIOUS_INSTANCES = [
+    'inv.thepixora.com',
+]
+
+
+def _extract_video_id(url: str) -> str:
+    """Extract YouTube video ID from URL."""
+    patterns = [
+        r'(?:v=|\/)([0-9A-Za-z_-]{11}).*',
+        r'(?:embed\/)([0-9A-Za-z_-]{11})',
+        r'^([0-9A-Za-z_-]{11})$',
+    ]
+    for pattern in patterns:
+        match = re.search(pattern, url)
+        if match:
+            return match.group(1)
+    return None
+
+
+def _invidious_api(endpoint: str, instance_idx: int = 0) -> dict:
+    """Query Invidious API with fallback to other instances."""
+    for i in range(len(INVIDIOUS_INSTANCES)):
+        idx = (instance_idx + i) % len(INVIDIOUS_INSTANCES)
+        instance = INVIDIOUS_INSTANCES[idx]
+        try:
+            url = f'https://{instance}{endpoint}'
+            req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
+            with urllib.request.urlopen(req, timeout=10) as response:
+                return json.loads(response.read().decode())
+        except Exception:
+            continue
+    raise RuntimeError('All Invidious instances failed')
+
+
+def _invidious_search(query: str) -> dict:
+    """Search YouTube via Invidious and return first result."""
+    endpoint = f'/api/v1/search?q={urllib.parse.quote(query)}'
+    results = _invidious_api(endpoint)
+    if not results or not isinstance(results, list):
+        raise RuntimeError('No search results')
+    video = next((r for r in results if r.get('type') == 'video'), None)
+    if not video:
+        raise RuntimeError('No video found')
+    return _invidious_get_video(video['videoId'])
+
+
+def _invidious_get_video(video_id: str) -> dict:
+    """Get video info from Invidious and convert to yt-dlp format."""
+    endpoint = f'/api/v1/videos/{video_id}'
+    data = _invidious_api(endpoint)
+    
+    # Find best audio format
+    audio_formats = [f for f in data.get('adaptiveFormats', []) 
+                     if f.get('type', '').startswith('audio/')]
+    if not audio_formats:
+        raise RuntimeError('No audio formats available')
+    
+    # Sort by bitrate, pick best
+    best_audio = max(audio_formats, key=lambda f: f.get('bitrate', 0))
+    
+    # Convert to yt-dlp format
+    return {
+        'id': data.get('videoId'),
+        'title': data.get('title'),
+        'url': best_audio.get('url'),
+        'webpage_url': f'https://www.youtube.com/watch?v={video_id}',
+        'thumbnail': data.get('videoThumbnails', [{}])[0].get('url'),
+        'duration': data.get('lengthSeconds'),
+        'ext': 'webm' if 'webm' in best_audio.get('type', '') else 'm4a',
+    }
+
 
 def _extract_info(url: str) -> dict:
-    import re
-    if not re.match(r'https?://', url):
+    # Try yt-dlp first
+    is_search = not re.match(r'https?://', url)
+    if is_search:
         url = 'ytsearch:' + url
+    
     cookie_file = os.environ.get('YT_COOKIES_FILE') or 'cookies.txt'
     opts = {
         'format': 'bestaudio/best',
@@ -35,14 +111,31 @@ def _extract_info(url: str) -> dict:
     }
     if os.path.isfile(cookie_file):
         opts['cookiefile'] = cookie_file
-    ydl = YoutubeDL(opts)
+    
     try:
+        ydl = YoutubeDL(opts)
         data = ydl.extract_info(url, download=False)
+        if 'entries' in data:
+            data = data['entries'][0]
+        return data
     except Exception as e:
-        raise RuntimeError(str(e))
-    if 'entries' in data:
-        data = data['entries'][0]
-    return data
+        error_msg = str(e)
+        # If blocked by YouTube, fall back to Invidious
+        if 'Sign in to confirm' in error_msg or 'bot' in error_msg.lower():
+            try:
+                if is_search:
+                    # Extract search query (remove 'ytsearch:' prefix)
+                    query = url.replace('ytsearch:', '')
+                    return _invidious_search(query)
+                else:
+                    # Extract video ID from URL
+                    video_id = _extract_video_id(url)
+                    if video_id:
+                        return _invidious_get_video(video_id)
+                    raise RuntimeError('Invalid YouTube URL')
+            except Exception as inv_error:
+                raise RuntimeError(f'yt-dlp failed: {error_msg}; Invidious failed: {inv_error}')
+        raise RuntimeError(error_msg)
 
 
 class YTDLSource(discord.PCMVolumeTransformer):
