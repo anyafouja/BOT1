@@ -123,12 +123,12 @@ _last_youtube_error: str | None = None
 _youtube_errors: list[str] = []
 
 INNERTUBE_CLIENTS = [
-    {'clientName': 'ANDROID', 'clientVersion': '19.09.37', 'osName': 'Android', 'osVersion': '14', 'platform': 'MOBILE', 'androidSdkVersion': 34},
-    {'clientName': 'ANDROID_MUSIC', 'clientVersion': '6.42.11', 'osName': 'Android', 'osVersion': '14', 'platform': 'MOBILE'},
+    {'clientName': 'TVHTML5_SIMPLY', 'clientVersion': '7.20201028'},
+    {'clientName': 'TVHTML5', 'clientVersion': '7.20201028'},
+    {'clientName': 'ANDROID', 'clientVersion': '19.09.37', 'osName': 'Android', 'osVersion': '14', 'platform': 'MOBILE'},
     {'clientName': 'IOS', 'clientVersion': '19.09.37', 'osName': 'iOS', 'osVersion': '17.0', 'platform': 'MOBILE', 'deviceModel': 'iPhone16,2'},
     {'clientName': 'WEB_REMIX', 'clientVersion': '1.20240304.00.00'},
     {'clientName': 'WEB', 'clientVersion': '2.20240101.00.00'},
-    {'clientName': 'TVHTML5', 'clientVersion': '7.20201028'},
 ]
 
 async def _try_player(video_id: str, client: dict, token: str | None = None) -> dict:
