@@ -9,247 +9,108 @@ from collections import deque
 from discord.ext import commands
 
 
-YT_OAUTH_REFRESH = os.getenv('YT_OAUTH_REFRESH', '')
 COOKIES_FILE = 'cookies.txt'
-CLIENT_ID = '861556708454-d6dlm3lh05idd8npek18k6be8ba3oc68.apps.googleusercontent.com'
-CLIENT_SECRET = 'SboVhoG9s0rNafixCSGGKXAT'
-OAUTH_TOKEN_URL = 'https://www.youtube.com/o/oauth2/token'
-
-_oauth_token: str | None = None
-_oauth_expiry: float = 0
-_last_auth_error: str = ''
 
 
-async def refresh_oauth_token() -> str | None:
-    global _oauth_token, _oauth_expiry
-    rt = YT_OAUTH_REFRESH
-    if not rt:
-        return None
-    if _oauth_token and time.time() < _oauth_expiry:
-        return _oauth_token
+async def _ytdlp(args: list[str]) -> tuple[str, str, int]:
     try:
-        import urllib.request
-        data = urllib.parse.urlencode({
-            'client_id': CLIENT_ID,
-            'client_secret': CLIENT_SECRET,
-            'refresh_token': rt,
-            'grant_type': 'refresh_token',
-        }).encode()
-        req = urllib.request.Request(OAUTH_TOKEN_URL, data=data)
-        with urllib.request.urlopen(req) as resp:
-            d = json.loads(resp.read())
-            if 'access_token' not in d:
-                return None
-            _oauth_token = d.get('access_token')
-            _oauth_expiry = time.time() + d.get('expires_in', 3600) - 60
-            return _oauth_token
-    except Exception:
-        return None
-
-
-async def refresh_cookies_playwright() -> bool:
-    global _last_auth_error
-    try:
-        from playwright.async_api import async_playwright
-    except ImportError as e:
-        _last_auth_error = f'playwright not installed: {e}'
-        return False
-
-    email = os.getenv('GOOGLE_EMAIL', '')
-    password = os.getenv('GOOGLE_PASSWORD', '')
-    if not email or not password:
-        _last_auth_error = 'GOOGLE_EMAIL or GOOGLE_PASSWORD not set'
-        return False
-
-    try:
-        async with async_playwright() as p:
-            browser = await p.chromium.launch(
-                headless=True,
-                args=['--no-sandbox', '--disable-blink-features=AutomationControlled'],
-            )
-            ctx = await browser.new_context(
-                viewport={'width': 1920, 'height': 1080},
-                user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36',
-            )
-            await ctx.add_init_script('''
-                Object.defineProperty(navigator, 'webdriver', { get: () => false });
-                window.chrome = { runtime: {} };
-                Object.defineProperty(navigator, 'languages', { get: () => ['en-US', 'en'] });
-            ''')
-            page = await ctx.new_page()
-
-            await page.goto('https://accounts.google.com/signin', wait_until='networkidle', timeout=30000)
-            await asyncio.sleep(2)
-            _last_auth_error = f'URL: {page.url[:80]} | Title: {await page.title()}'
-
-            email_selectors = ['input[type="email"]', '#identifierId', 'input[name="identifier"]']
-            email_input = None
-            for sel in email_selectors:
-                el = page.locator(sel)
-                if await el.is_visible(timeout=2000):
-                    email_input = el
-                    break
-            if not email_input:
-                await browser.close()
-                _last_auth_error += ' - email field not found (tried 3 selectors)'
-                return False
-            await email_input.fill(email)
-            await page.locator('#identifierNext').click()
-            await asyncio.sleep(3)
-
-            pw_selectors = ['input[type="password"]', 'input[name="Passwd"]', '#password']
-            pw_input = None
-            for sel in pw_selectors:
-                el = page.locator(sel)
-                if await el.is_visible(timeout=3000):
-                    pw_input = el
-                    break
-            if not pw_input:
-                await browser.close()
-                _last_auth_error += ' - password field not found (tried 3 selectors)'
-                return False
-            await pw_input.fill(password)
-            await page.locator('#passwordNext').click()
-            await asyncio.sleep(5)
-
-            _last_auth_error += f' -> {page.url[:80]}'
-
-            if 'myaccount' in page.url or 'signin' in page.url.lower() or 'challenge' in page.url.lower():
-                _last_auth_error += ' - 2FA/challenge required'
-                await browser.close()
-                return False
-
-            await page.goto('https://www.youtube.com/', wait_until='networkidle', timeout=30000)
-            await asyncio.sleep(3)
-
-            cookies = await ctx.cookies()
-            if not cookies:
-                _last_auth_error += ' - no cookies from youtube'
-                await browser.close()
-                return False
-
-            has_session = any('SID' in c['name'] or 'PSID' in c['name'] for c in cookies)
-            _last_auth_error = f'Login OK, {len(cookies)} cookies, has_session={has_session}'
-
-            now = int(time.time())
-            expiry = now + 86400 * 365
-            lines = [
-                '# Netscape HTTP Cookie File',
-                '# https://curl.haxx.se/rfc/cookie_spec.html',
-                '# Generated by CachyMusic Playwright',
-            ]
-            for c in cookies:
-                domain = c.get('domain', '.youtube.com')
-                flag = 'TRUE' if domain.startswith('.') else 'FALSE'
-                path = c.get('path', '/')
-                secure = 'TRUE' if c.get('secure', False) else 'FALSE'
-                exp = int(c.get('expires', expiry))
-                lines.append(f'{domain}\t{flag}\t{path}\t{secure}\t{exp}\t{c["name"]}\t{c["value"]}')
-
-            with open(COOKIES_FILE, 'w') as f:
-                f.write('\n'.join(lines))
-
-            await browser.close()
-            return True
+        proc = await asyncio.create_subprocess_exec(
+            'yt-dlp', *args,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=30)
+        return stdout.decode(), stderr.decode(), proc.returncode or 0
     except Exception as e:
-        _last_auth_error = f'Playwright error: {type(e).__name__}: {e}'
-        return False
+        return '', str(e), -1
 
 
-async def ensure_cookies():
-    if os.getenv('GOOGLE_EMAIL'):
-        return await refresh_cookies_playwright()
-    if os.path.exists(COOKIES_FILE) and os.path.getsize(COOKIES_FILE) > 50:
-        return True
-    return False
-
-
-async def ytdlp_get_url(query: str) -> str | None:
-    await ensure_cookies()
-
-    cmd = [
-        'yt-dlp',
-        '--cookies', COOKIES_FILE,
-        '-f', 'bestaudio[ext=webm]/bestaudio',
-        '--get-url',
-        '--no-playlist',
-        '--quiet',
-        f'ytsearch:{query}',
-    ]
-    try:
-        proc = await asyncio.create_subprocess_exec(
-            *cmd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-        )
-        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=30)
-        if proc.returncode != 0:
-            return None
-        url = stdout.decode().strip().split('\n')[0]
-        if url:
-            return url
-    except Exception:
-        pass
-    return None
-
-
-async def search_youtube(query: str) -> list[dict]:
-    await ensure_cookies()
-
-    cmd = [
-        'yt-dlp',
-        '--cookies', COOKIES_FILE,
-        '--flat-playlist',
-        '--dump-single-json',
-        '--no-playlist',
-        '--quiet',
-        f'ytsearch10:{query}',
-    ]
-    try:
-        proc = await asyncio.create_subprocess_exec(
-            *cmd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-        )
-        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=30)
-        if proc.returncode != 0:
-            return []
-        data = json.loads(stdout.decode())
-        entries = data.get('entries', [])
-        results = []
-        for e in entries:
-            vid = e.get('id', '')
-            if not vid:
-                continue
-            duration = e.get('duration', 0) or 0
-            results.append({
-                'id': vid,
-                'title': e.get('title', 'Unknown'),
-                'thumbnail': e.get('thumbnail', ''),
-                'duration': duration,
-                'author': e.get('uploader', 'Unknown'),
-                'webpage_url': e.get('webpage_url', f'https://youtube.com/watch?v={vid}'),
-            })
-        return results
-    except Exception:
+async def sc_search(query: str) -> list[dict]:
+    out, _, code = await _ytdlp([
+        '--flat-playlist', '--dump-single-json', '--no-playlist', '--quiet',
+        f'scsearch10:{query}',
+    ])
+    if code != 0 or not out:
         return []
+    data = json.loads(out)
+    results = []
+    for e in data.get('entries', []):
+        results.append({
+            'id': e.get('id', ''),
+            'title': e.get('title', 'Unknown'),
+            'thumbnail': e.get('thumbnail', ''),
+            'duration': e.get('duration', 0) or 0,
+            'author': e.get('uploader', 'Unknown'),
+            'webpage_url': e.get('webpage_url', f'https://soundcloud.com/{e.get("id", "")}'),
+            'source': 'soundcloud',
+        })
+    return results
+
+
+async def sc_get_url(url: str) -> str | None:
+    out, _, code = await _ytdlp([
+        '-f', 'bestaudio', '--get-url', '--no-playlist', '--quiet', url,
+    ])
+    return out.strip().split('\n')[0] if code == 0 and out.strip() else None
+
+
+async def yt_search(query: str) -> list[dict]:
+    cookies = ['--cookies', COOKIES_FILE] if os.path.exists(COOKIES_FILE) else []
+    out, _, code = await _ytdlp([
+        *cookies, '--flat-playlist', '--dump-single-json', '--no-playlist', '--quiet',
+        f'ytsearch10:{query}',
+    ])
+    if code != 0 or not out:
+        return []
+    data = json.loads(out)
+    results = []
+    for e in data.get('entries', []):
+        vid = e.get('id', '')
+        if not vid:
+            continue
+        results.append({
+            'id': vid,
+            'title': e.get('title', 'Unknown'),
+            'thumbnail': e.get('thumbnail', ''),
+            'duration': e.get('duration', 0) or 0,
+            'author': e.get('uploader', 'Unknown'),
+            'webpage_url': f'https://youtube.com/watch?v={vid}',
+            'source': 'youtube',
+        })
+    return results
+
+
+async def yt_get_url(url: str) -> str | None:
+    cookies = ['--cookies', COOKIES_FILE] if os.path.exists(COOKIES_FILE) else []
+    out, _, code = await _ytdlp([
+        *cookies, '-f', 'bestaudio', '--get-url', '--no-playlist', '--quiet', url,
+    ])
+    return out.strip().split('\n')[0] if code == 0 and out.strip() else None
 
 
 class Track:
     def __init__(self, data: dict):
         self.id = data.get('id', '')
         self.title = data.get('title', 'Unknown')
-        self.uri = data.get('webpage_url', f'https://youtube.com/watch?v={self.id}')
+        self.uri = data.get('webpage_url', '')
         self.artwork = data.get('thumbnail', '')
         self.duration = data.get('duration', 0)
         self.author = data.get('author', 'Unknown')
+        self.source = data.get('source', 'unknown')
         self._url = None
 
     async def get_url(self) -> str | None:
         if self._url:
             return self._url
-        self._url = await ytdlp_get_url(self.uri)
+        if self.source == 'soundcloud':
+            self._url = await sc_get_url(self.uri)
+        else:
+            self._url = await yt_get_url(self.uri)
         return self._url
+
+    @property
+    def display_uri(self) -> str:
+        return self.uri or f'https://youtube.com/watch?v={self.id}'
 
 
 class MusicPlayer:
@@ -303,11 +164,7 @@ class MusicPlayer:
         self.current = track
         url = await track.get_url()
         if not url:
-            err = _last_auth_error
-            msg = 'Failed to get audio URL.'
-            if err:
-                msg += f' Auth: {err}'
-            await self.text_channel.send(msg)
+            await self.text_channel.send('Failed to get audio URL.')
             return await self._next()
 
         ffmpeg_opts = {
@@ -514,9 +371,7 @@ class Music(commands.Cog):
                     if len(real) == 0:
                         await self.cleanup(member.guild)
 
-    @commands.hybrid_command(name='play', aliases=['p'])
-    async def play_(self, ctx, *, search: str):
-        """Play a song from YouTube."""
+    async def _search_and_play(self, ctx, search: str, source: str):
         await ctx.defer()
         try:
             player = await self.get_player(ctx)
@@ -527,24 +382,33 @@ class Music(commands.Cog):
             await ctx.send(str(e))
             return
 
-        try:
-            results = await search_youtube(search)
-        except Exception as e:
-            await ctx.send(f'Search failed: {e}')
-            return
+        if source == 'soundcloud':
+            results = await sc_search(search)
+        else:
+            results = await yt_search(search)
 
         if not results:
-            await ctx.send('No results found.')
+            await ctx.send(f'No results found on {source}.')
             return
 
         tracks = [Track(r) for r in results]
         track = tracks[0]
         await player.enqueue(track)
-        embed = discord.Embed(description=f'[{track.title}]({track.uri})', color=0xFFC0CB)
+        embed = discord.Embed(description=f'[{track.title}]({track.display_uri})', color=0xFFC0CB)
         await ctx.send(embed=embed)
 
         if not player.is_playing and not player.is_paused:
             await player.start()
+
+    @commands.hybrid_command(name='play', aliases=['p'])
+    async def play_(self, ctx, *, search: str):
+        """Play from SoundCloud (primary) or YouTube (fallback)."""
+        await self._search_and_play(ctx, search, 'soundcloud')
+
+    @commands.hybrid_command(name='ytplay', aliases=['yp'])
+    async def ytplay_(self, ctx, *, search: str):
+        """Play from YouTube (requires manual cookie export)."""
+        await self._search_and_play(ctx, search, 'youtube')
 
     @commands.hybrid_command(name='skip', aliases=['s'])
     async def skip_(self, ctx):
