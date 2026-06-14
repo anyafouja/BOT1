@@ -1,10 +1,10 @@
 server:
   port: 2333
   address: 0.0.0.0
-auth:
-  password: youshallnotpass
+plugins:
 lavalink:
   server:
+    password: youshallnotpass
     sources:
       youtube: true
       bandcamp: true
@@ -13,7 +13,6 @@ lavalink:
       vimeo: true
       http: true
       local: false
-    plugins: []
     filters:
       volume: true
       equalizer: true
@@ -38,4 +37,9 @@ metrics:
 sentry:
   dsn: ''
   environment: ''
-plugins: []
+logging:
+  file:
+    path: ./logs/
+  level:
+    root: INFO
+    lavalink: INFO
