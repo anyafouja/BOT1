@@ -120,12 +120,13 @@ class MusicPlayer:
 
     async def start(self) -> None:
         self._stop = False
-        if self.queue.empty() and not self.current:
-            try:
-                track = await asyncio.wait_for(self.queue.get(), timeout=300)
-                await self._play(track)
-            except asyncio.TimeoutError:
-                await self.disconnect()
+        if self.current:
+            return
+        try:
+            track = await asyncio.wait_for(self.queue.get(), timeout=300)
+            await self._play(track)
+        except asyncio.TimeoutError:
+            await self.disconnect()
 
     async def enqueue(self, track: Track) -> None:
         await self.queue.put(track)
