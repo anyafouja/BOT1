@@ -15,6 +15,7 @@ INNERTUBE_KEYS = {
     'ANDROID_MUSIC': 'AIzaSyA8eiZmM1FaDVjRy-df2KTyQ_vz_yYM39w',
     'WEB': 'AIzaSyAO_FJ2SlqU8Q4STEHLGCilw_Y9_11qcW8',
     'WEB_REMIX': 'AIzaSyAO_FJ2SlqU8Q4STEHLGCilw_Y9_11qcW8',
+    'TV': 'AIzaSyAO_FJ2SlqU8Q4STEHLGCilw_Y9_11qcW8',
     'TVHTML5': 'AIzaSyAO_FJ2SlqU8Q4STEHLGCilw_Y9_11qcW8',
     'IOS': 'AIzaSyB-63vPrdThhKuerbB2N_l7Kwwcxj6yUAc',
 }
@@ -124,11 +125,11 @@ _youtube_errors: list[str] = []
 
 INNERTUBE_CLIENTS = [
     {'clientName': 'TVHTML5_SIMPLY', 'clientVersion': '7.20201028'},
-    {'clientName': 'TVHTML5', 'clientVersion': '7.20201028'},
+    {'clientName': 'TV', 'clientVersion': '1.0'},
     {'clientName': 'ANDROID', 'clientVersion': '19.09.37', 'osName': 'Android', 'osVersion': '14', 'platform': 'MOBILE'},
     {'clientName': 'IOS', 'clientVersion': '19.09.37', 'osName': 'iOS', 'osVersion': '17.0', 'platform': 'MOBILE', 'deviceModel': 'iPhone16,2'},
     {'clientName': 'WEB_REMIX', 'clientVersion': '1.20240304.00.00'},
-    {'clientName': 'WEB', 'clientVersion': '2.20240101.00.00'},
+    {'clientName': 'TVHTML5', 'clientVersion': '7.20201028'},
 ]
 
 async def _try_player(video_id: str, client: dict, token: str | None = None) -> dict:
@@ -155,7 +156,7 @@ async def get_audio_url(video_id: str) -> str | None:
 
     for client in INNERTUBE_CLIENTS:
         cn = client['clientName']
-        data = await _try_player(video_id, client, token if cn == 'TVHTML5' else None)
+        data = await _try_player(video_id, client, token if cn in ('TV', 'TVHTML5') else None)
 
         api_err = data.get('error')
         if api_err:
