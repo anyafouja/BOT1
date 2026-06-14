@@ -36,10 +36,14 @@ async def refresh_oauth_token() -> str | None:
                 'grant_type': 'refresh_token',
             }) as resp:
                 data = await resp.json()
+                if 'access_token' not in data:
+                    print(f'[OAUTH_ERROR] Refresh failed: {data}')
+                    return None
                 _oauth_token = data.get('access_token')
                 _oauth_expiry = time.time() + data.get('expires_in', 3600) - 60
                 return _oauth_token
-    except Exception:
+    except Exception as e:
+        print(f'[OAUTH_EXCEPTION] {e}')
         return None
 
 
@@ -127,11 +131,20 @@ async def get_audio_url(video_id: str) -> str | None:
         async with session.post(INNERTUBE_API, json=payload, headers=headers) as resp:
             data = await resp.json()
 
-    # Try adaptiveFormats first (audio-only), then formats
-    fmts = data.get('streamingData', {}).get('adaptiveFormats', [])
-    fmts += data.get('streamingData', {}).get('formats', [])
+    err = data.get('error')
+    if err:
+        print(f'[YT_ERROR] InnerTube player error: {err}')
+    sd = data.get('streamingData') or {}
+    if not sd:
+        print(f'[YT_ERROR] No streamingData in response. Keys: {list(data.keys())[:10]}')
+        return None
 
-    # Prefer audio-only: opus > m4a > any audio
+    fmts = sd.get('adaptiveFormats', []) + sd.get('formats', [])
+
+    if not fmts:
+        print('[YT_ERROR] No formats in streamingData')
+        return None
+
     def sort_key(f):
         mt = f.get('mimeType', '')
         score = 0
@@ -221,7 +234,7 @@ class MusicPlayer:
         self.current = track
         url = await track.get_url()
         if not url:
-            await self.text_channel.send('Failed to get audio URL.')
+            await self.text_channel.send('Failed to get audio URL (check bot logs).')
             return await self._next()
 
         ffmpeg_opts = {
