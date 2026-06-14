@@ -24,7 +24,7 @@ def _extract_info(url: str) -> dict:
         url = 'ytsearch:' + url
     cookies = os.environ.get('YT_COOKIES_FILE') or 'cookies.txt'
     cookie_args = ['--cookies', cookies] if os.path.isfile(cookies) else []
-    cmd = ['yt-dlp', *cookie_args, '-f', 'bestaudio[ext=webm]/bestaudio', '-g', '-j', '--no-playlist', '--quiet', url]
+    cmd = ['yt-dlp', *cookie_args, '--remote-components', 'ejs:github', '-f', 'bestaudio[ext=webm]/bestaudio', '-g', '-j', '--no-playlist', '--quiet', url]
     try:
         out = subprocess.check_output(cmd, text=True, timeout=30, stderr=subprocess.PIPE)
     except subprocess.CalledProcessError as e:
