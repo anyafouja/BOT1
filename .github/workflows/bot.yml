@@ -26,6 +26,8 @@ jobs:
       - name: download Lavalink
         run: curl -sL https://github.com/lavalink-devs/Lavalink/releases/download/4.2.2/Lavalink.jar -o Lavalink.jar
       - name: start Lavalink
+        env:
+          YT_OAUTH_REFRESH: ${{ secrets.YT_OAUTH_REFRESH }}
         run: nohup java -Xmx512M -Xms256M -jar Lavalink.jar > lavalink.log 2>&1 &
       - name: wait for Lavalink
         run: |

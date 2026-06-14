@@ -38,10 +38,12 @@ plugins:
     allowSearch: true
     allowDirectVideoIds: true
     allowDirectPlaylistIds: true
+    oauth:
+      enabled: true
+      refreshToken: ${YT_OAUTH_REFRESH:}
+      skipInitialization: true
     clients:
       - TVHTML5_SIMPLY
-      - MWEB
-      - IOS
       - ANDROID_VR
       - WEB
       - WEBEMBEDDED
