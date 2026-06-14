@@ -43,6 +43,7 @@ plugins:
       refreshToken: ${YT_OAUTH_REFRESH:}
       skipInitialization: true
     clients:
+      - TV
       - TVHTML5_SIMPLY
       - ANDROID_VR
       - WEB

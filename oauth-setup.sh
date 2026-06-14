@@ -36,7 +36,7 @@ plugins:
     oauth:
       enabled: true
     clients:
-      - WEB
+      - TV
 logging:
   level:
     root: INFO
