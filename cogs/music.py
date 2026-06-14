@@ -6,6 +6,7 @@ import os
 import json
 from discord.ext import commands
 from yt_dlp import YoutubeDL
+from yt_dlp.networking.impersonate import ImpersonateTarget
 
 FFMPEG_OPTIONS = {
     'before_options': (
@@ -30,6 +31,7 @@ def _extract_info(url: str) -> dict:
         'no_warnings': True,
         'extractor_retries': 10,
         'socket_timeout': 30,
+        'impersonate': ImpersonateTarget.from_str('chrome-116:windows-10'),
     }
     if os.path.isfile(cookie_file):
         opts['cookiefile'] = cookie_file
