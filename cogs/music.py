@@ -22,7 +22,7 @@ def _extract_info(url: str) -> dict:
     import re
     if not re.match(r'https?://', url):
         url = 'ytsearch:' + url
-    cmd = ['yt-dlp', '--remote-components', 'ejs:github', '--js-runtimes', 'deno', '--extractor-args', 'youtube:player_client=web_creator,web', '-j', url]
+    cmd = ['yt-dlp', '--remote-components', 'ejs:github', '--js-runtimes', 'deno', '--extractor-args', 'youtube:player_client=tv', '-j', url]
     cookies = os.environ.get('YT_COOKIES_FILE') or 'cookies.txt'
     if os.path.isfile(cookies):
         cmd.extend(['--cookies', cookies])
