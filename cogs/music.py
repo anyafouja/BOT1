@@ -1,38 +1,191 @@
 import asyncio
 import discord
+import yt_dlp
 from collections import deque
 from discord.ext import commands
-import wavelink
-from wavelink import QueueMode
 
 
-class CachyPlayer(wavelink.Player):
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.text_channel: discord.TextChannel | None = None
+YTDL_OPTS = {
+    'format': '18',
+    'extractor_args': {'youtube': {'player_client': ['android']}},
+    'quiet': True,
+    'no_warnings': True,
+    'no_color': True,
+}
+
+
+class Track:
+    def __init__(self, data: dict):
+        self.id = data.get('id', '')
+        self.title = data.get('title', 'Unknown')
+        self.uri = data.get('webpage_url', f'https://youtube.com/watch?v={self.id}')
+        self.artwork = data.get('thumbnail', '')
+        self.duration = data.get('duration', 0)
+        self.author = data.get('uploader', 'Unknown')
+        self._url = None
+
+    async def get_url(self) -> str:
+        if self._url:
+            return self._url
+        loop = asyncio.get_event_loop()
+        info = await loop.run_in_executor(None, lambda: yt_dlp.YoutubeDL(YTDL_OPTS).extract_info(self.uri, download=False))
+        self._url = info.get('url', '')
+        return self._url
+
+
+class MusicPlayer:
+    def __init__(self, ctx: commands.Context):
+        self.ctx = ctx
+        self.bot = ctx.bot
+        self.vc: discord.VoiceClient | None = None
+        self.queue: asyncio.Queue[Track] = asyncio.Queue()
+        self._queue_list: list[Track] = []
+        self.current: Track | None = None
+        self.loop_mode = 0
+        self.history: deque[Track] = deque(maxlen=20)
         self.np_message: discord.Message | None = None
-        self.loop_mode: int = 0
-        self._last_tracks: deque[wavelink.Playable] = deque(maxlen=20)
+        self.text_channel = ctx.channel
+        self._playing = asyncio.Event()
+        self._paused = False
+        self._stop = False
 
-    async def destroy(self):
+    @property
+    def is_playing(self) -> bool:
+        return self.vc and self.vc.is_playing()
+
+    @property
+    def is_paused(self) -> bool:
+        return self.vc and self.vc.is_paused()
+
+    async def connect(self, channel: discord.VoiceChannel) -> None:
+        try:
+            await channel.edit(rtc_region='singapore')
+        except Exception:
+            pass
+        self.vc = await channel.connect()
+        self.vc.inactive_timeout = 60
+
+    async def disconnect(self) -> None:
+        self._stop = True
         if self.np_message:
             try:
                 await self.np_message.delete()
             except Exception:
                 pass
             self.np_message = None
+        if self.vc:
+            try:
+                await self.vc.disconnect(force=True)
+            except Exception:
+                pass
+            self.vc = None
+        guild_id = self.ctx.guild.id
+        self.bot.voice_players.pop(guild_id, None)
+
+    async def _play(self, track: Track) -> None:
+        self.current = track
+        url = await track.get_url()
+        if not url:
+            await self.text_channel.send('Failed to get audio URL.')
+            return await self._next()
+
+        ffmpeg_opts = {
+            'before_options': '-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5 -analyzeduration 0',
+            'options': '-vn -bufsize 64k',
+        }
+        source = discord.FFmpegPCMAudio(url, **ffmpeg_opts)
+        self.vc.play(source, after=lambda e: asyncio.run_coroutine_threadsafe(self._on_end(), self.bot.loop))
+        self._paused = False
+        await self._show_np(track)
+
+    async def _on_end(self) -> None:
+        if self._stop:
+            return
+        self.history.append(self.current)
+        if self.loop_mode == 1:
+            await self._play(self.current)
+        else:
+            await self._next()
+
+    async def _next(self) -> None:
         try:
-            await self.disconnect(force=True)
+            track = await asyncio.wait_for(self.queue.get(), timeout=300)
+            if self.loop_mode == 2:
+                self.queue.put_nowait(self.current)
+            self._queue_list.pop(0)
+            await self._play(track)
+        except asyncio.TimeoutError:
+            await self.text_channel.send('Queue empty, disconnecting.')
+            await self.disconnect()
+
+    async def start(self) -> None:
+        self._stop = False
+        if self.queue.empty() and not self.current:
+            try:
+                track = await asyncio.wait_for(self.queue.get(), timeout=300)
+                await self._play(track)
+            except asyncio.TimeoutError:
+                await self.disconnect()
+
+    async def enqueue(self, track: Track) -> None:
+        await self.queue.put(track)
+        self._queue_list.append(track)
+
+    async def skip(self) -> None:
+        if self.vc and self.vc.is_playing():
+            self.vc.stop()
+
+    async def pause(self) -> None:
+        if self.vc and self.vc.is_playing():
+            self.vc.pause()
+            self._paused = True
+
+    async def resume(self) -> None:
+        if self.vc and self.vc.is_resumable():
+            self.vc.resume()
+            self._paused = False
+
+    def get_queue(self) -> list[Track]:
+        return list(self._queue_list)
+
+    def clear_queue(self) -> None:
+        self._queue_list.clear()
+        while not self.queue.empty():
+            try:
+                self.queue.get_nowait()
+            except asyncio.QueueEmpty:
+                break
+
+    def shuffle_queue(self) -> None:
+        import random
+        random.shuffle(self._queue_list)
+        new_q = asyncio.Queue()
+        for t in self._queue_list:
+            new_q.put_nowait(t)
+        self.queue = new_q
+
+    async def _show_np(self, track: Track) -> None:
+        view = NowPlayingView(self, self.ctx.guild.id)
+        embed = discord.Embed(color=0xFFC0CB)
+        if track.artwork:
+            embed.set_image(url=track.artwork)
+        if self.np_message:
+            try:
+                await self.np_message.delete()
+            except Exception:
+                pass
+        try:
+            self.np_message = await self.text_channel.send(embed=embed, view=view)
         except Exception:
             pass
-        await super().destroy()
 
 
 class NowPlayingView(discord.ui.View):
-    def __init__(self, player: CachyPlayer, guild_id: int):
+    def __init__(self, player: MusicPlayer, guild_id: int):
         super().__init__(timeout=None)
         self.player = player
         self.guild_id = guild_id
+        self._pause_button.label = '||'
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         if interaction.guild_id != self.guild_id:
@@ -50,24 +203,24 @@ class NowPlayingView(discord.ui.View):
     @discord.ui.button(label='\u25C1\u25C1', style=discord.ButtonStyle.secondary)
     async def previous(self, interaction: discord.Interaction, button: discord.ui.Button):
         player = self.player
-        if not player._last_tracks:
+        if not player.history:
             return await interaction.response.send_message('No previous song.', ephemeral=True)
-        prev = player._last_tracks.pop()
-        player.queue.put_at(0, prev)
-        if player.playing or player.paused:
+        prev = player.history.pop()
+        await player.enqueue(prev)
+        if player.is_playing or player.is_paused:
             await player.skip()
         else:
-            await player.play(player.queue.get())
+            await player.start()
         await interaction.response.defer()
 
     @discord.ui.button(label='||', style=discord.ButtonStyle.secondary)
     async def pause_play(self, interaction: discord.Interaction, button: discord.ui.Button):
         player = self.player
-        if player.paused:
-            await player.pause(False)
+        if player.is_paused:
+            await player.resume()
             button.label = '||'
-        elif player.playing:
-            await player.pause(True)
+        elif player.is_playing:
+            await player.pause()
             button.label = '\u25B7'
         else:
             return await interaction.response.send_message('Nothing playing.', ephemeral=True)
@@ -76,7 +229,7 @@ class NowPlayingView(discord.ui.View):
     @discord.ui.button(label='\u25B7\u25B7', style=discord.ButtonStyle.secondary)
     async def next_(self, interaction: discord.Interaction, button: discord.ui.Button):
         player = self.player
-        if not player.playing and not player.paused:
+        if not player.is_playing and not player.is_paused:
             return await interaction.response.send_message('Nothing playing.', ephemeral=True)
         await player.skip()
         await interaction.response.defer()
@@ -86,15 +239,12 @@ class NowPlayingView(discord.ui.View):
         player = self.player
         if player.loop_mode == 0:
             player.loop_mode = 1
-            player.queue.mode = QueueMode.loop
             button.label = '\u27F2'
         elif player.loop_mode == 1:
             player.loop_mode = 2
-            player.queue.mode = QueueMode.loop_all
             button.label = '\u27F2'
         else:
             player.loop_mode = 0
-            player.queue.mode = QueueMode.normal
             button.label = '\u27F3'
         await interaction.response.edit_message(view=self)
 
@@ -102,95 +252,34 @@ class NowPlayingView(discord.ui.View):
 class Music(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
-        self.locks = {}
+        self.bot.voice_players = {}
+
+    async def get_player(self, ctx) -> MusicPlayer:
+        guild_id = ctx.guild.id
+        if guild_id not in self.bot.voice_players:
+            player = MusicPlayer(ctx)
+            if ctx.author.voice:
+                await player.connect(ctx.author.voice.channel)
+            else:
+                raise RuntimeError('Not connected to a voice channel.')
+            self.bot.voice_players[guild_id] = player
+        else:
+            player = self.bot.voice_players[guild_id]
+            if ctx.author.voice and player.vc and player.vc.channel != ctx.author.voice.channel:
+                await player.vc.move_to(ctx.author.voice.channel)
+        player.text_channel = ctx.channel
+        return player
 
     async def cleanup(self, guild) -> None:
-        player = guild.voice_client
-        if player and isinstance(player, CachyPlayer):
-            if player.np_message:
-                try:
-                    await player.np_message.delete()
-                except Exception:
-                    pass
-                player.np_message = None
-            try:
-                await player.destroy()
-            except Exception:
-                pass
-        self.locks.pop(guild.id, None)
-
-    async def get_player(self, ctx) -> CachyPlayer:
-        guild_id = ctx.guild.id
-        if guild_id not in self.locks:
-            self.locks[guild_id] = asyncio.Lock()
-        async with self.locks[guild_id]:
-            player = ctx.voice_client
-            if not player or not isinstance(player, CachyPlayer):
-                if ctx.author.voice:
-                    try:
-                        await ctx.author.voice.channel.edit(rtc_region='singapore')
-                    except Exception:
-                        pass
-                    player = await ctx.author.voice.channel.connect(cls=CachyPlayer)
-                    player.inactive_timeout = 60
-                    await player.set_volume(500)
-                    player.text_channel = ctx.channel
-                else:
-                    raise RuntimeError('Not connected to a voice channel.')
-            elif ctx.author.voice and player.channel != ctx.author.voice.channel:
-                await player.move_to(ctx.author.voice.channel)
-            player.text_channel = ctx.channel
-            return player
-
-    def get_cachy_player(self, guild) -> CachyPlayer | None:
-        vc = guild.voice_client
-        if vc and isinstance(vc, CachyPlayer):
-            return vc
-        return None
-
-    @commands.Cog.listener()
-    async def on_wavelink_track_start(self, payload: wavelink.TrackStartEventPayload):
-        player: CachyPlayer | None = payload.player
-        if not player:
-            return
-        track = payload.original or payload.track
-        if not player.text_channel:
-            return
-
-        view = NowPlayingView(player, player.guild.id)
-        embed = discord.Embed(color=0xFFC0CB)
-        if track.artwork:
-            embed.set_image(url=track.artwork)
-
-        if player.np_message:
-            try:
-                await player.np_message.delete()
-            except Exception:
-                pass
-        try:
-            player.np_message = await player.text_channel.send(embed=embed, view=view)
-        except Exception:
-            pass
-
-    @commands.Cog.listener()
-    async def on_wavelink_track_end(self, payload: wavelink.TrackEndEventPayload):
-        player: CachyPlayer | None = payload.player
-        if not player or not payload.original:
-            return
-        if player.loop_mode == 0:
-            player._last_tracks.append(payload.original)
-
-    @commands.Cog.listener()
-    async def on_wavelink_inactive_player(self, player: CachyPlayer):
-        await self.cleanup(player.guild)
+        player = self.bot.voice_players.pop(guild.id, None)
+        if player:
+            await player.disconnect()
 
     @commands.Cog.listener()
     async def on_voice_state_update(self, member, before, after):
         if member.id == self.bot.user.id:
             if after.channel is None:
-                player = self.get_cachy_player(member.guild)
-                if player:
-                    await self.cleanup(member.guild)
+                await self.cleanup(member.guild)
             return
         vc = member.guild.voice_client
         if vc and vc.channel:
@@ -216,29 +305,43 @@ class Music(commands.Cog):
             await ctx.send(str(e))
             return
 
-        tracks = await wavelink.Playable.search(search, source=wavelink.TrackSource.YouTube)
-        if not tracks:
+        loop = asyncio.get_event_loop()
+        try:
+            with yt_dlp.YoutubeDL({**YTDL_OPTS, 'extract_flat': True}) as ydl:
+                data = await loop.run_in_executor(None, lambda: ydl.extract_info(f'ytsearch:{search}', download=False))
+        except Exception as e:
+            await ctx.send(f'Search failed: {e}')
+            return
+
+        entries = data.get('entries', [])
+        if not entries:
             await ctx.send('No results found.')
             return
-        if isinstance(tracks, wavelink.Playlist):
+
+        tracks = []
+        for entry in entries:
+            if entry:
+                tracks.append(Track(entry))
+
+        if isinstance(data, dict) and data.get('_type') == 'playlist' or len(tracks) > 1:
             for t in tracks:
-                player.queue.put(t)
-            embed = discord.Embed(description=f'Added {len(tracks)} songs from **{tracks.name}**', color=0xFFC0CB)
+                await player.enqueue(t)
+            embed = discord.Embed(description=f'Added {len(tracks)} songs from **{search}**', color=0xFFC0CB)
             await ctx.send(embed=embed)
         else:
             track = tracks[0]
-            player.queue.put(track)
+            await player.enqueue(track)
             embed = discord.Embed(description=f'[{track.title}]({track.uri})', color=0xFFC0CB)
             await ctx.send(embed=embed)
 
-        if not player.playing:
-            await player.play(player.queue.get())
+        if not player.is_playing and not player.is_paused:
+            await player.start()
 
     @commands.hybrid_command(name='skip', aliases=['s'])
     async def skip_(self, ctx):
         """Skip the current song."""
-        player = self.get_cachy_player(ctx.guild)
-        if not player or not player.playing:
+        player = self.bot.voice_players.get(ctx.guild.id)
+        if not player or not player.is_playing:
             return await ctx.send('Nothing playing.')
         await player.skip()
         await ctx.send(embed=discord.Embed(description='Skipped', color=0xFFC0CB))
@@ -255,9 +358,9 @@ class Music(commands.Cog):
     @commands.hybrid_command(name='pause')
     async def pause_(self, ctx):
         """Pause the music."""
-        player = self.get_cachy_player(ctx.guild)
-        if player and player.playing:
-            await player.pause(True)
+        player = self.bot.voice_players.get(ctx.guild.id)
+        if player and player.is_playing:
+            await player.pause()
             await ctx.send(embed=discord.Embed(description='Paused', color=0xFFC0CB))
         else:
             await ctx.send('Nothing playing.')
@@ -265,9 +368,9 @@ class Music(commands.Cog):
     @commands.hybrid_command(name='resume')
     async def resume_(self, ctx):
         """Resume the music."""
-        player = self.get_cachy_player(ctx.guild)
-        if player and player.paused:
-            await player.pause(False)
+        player = self.bot.voice_players.get(ctx.guild.id)
+        if player and player.is_paused:
+            await player.resume()
             await ctx.send(embed=discord.Embed(description='Resumed', color=0xFFC0CB))
         else:
             await ctx.send('Not paused.')
@@ -275,11 +378,14 @@ class Music(commands.Cog):
     @commands.hybrid_command(name='queue', aliases=['q'])
     async def queue_info(self, ctx):
         """Show the song queue."""
-        player = self.get_cachy_player(ctx.guild)
-        if not player or player.queue.is_empty:
+        player = self.bot.voice_players.get(ctx.guild.id)
+        if not player:
             return await ctx.send('Queue is empty.')
 
-        upcoming = list(player.queue.copy())
+        upcoming = player.get_queue()
+        if not upcoming:
+            return await ctx.send('Queue is empty.')
+
         track_count = len(upcoming)
         max_tracks = 10
         lines = []
@@ -294,11 +400,14 @@ class Music(commands.Cog):
     @commands.hybrid_command(name='volume', aliases=['vol'])
     async def change_volume(self, ctx, vol: int):
         """Set volume (1-100)."""
-        player = self.get_cachy_player(ctx.guild)
-        if not player or not 0 < vol <= 100:
+        if not 0 < vol <= 100:
             return await ctx.send('Invalid volume (1-100).')
-        await player.set_volume(vol * 10)
-        await ctx.send(embed=discord.Embed(description=f'Volume: {vol}%', color=0xFFC0CB))
+        player = self.bot.voice_players.get(ctx.guild.id)
+        if player and player.vc:
+            player.vc.source.volume = vol / 100
+            await ctx.send(embed=discord.Embed(description=f'Volume: {vol}%', color=0xFFC0CB))
+        else:
+            await ctx.send('Not connected.')
 
     @commands.hybrid_command(name='ping')
     async def ping_(self, ctx):
@@ -308,45 +417,42 @@ class Music(commands.Cog):
     @commands.hybrid_command(name='clear-queue')
     async def clear_queue_(self, ctx):
         """Clear all songs from the queue."""
-        player = self.get_cachy_player(ctx.guild)
+        player = self.bot.voice_players.get(ctx.guild.id)
         if not player:
             return await ctx.send('No queue to clear.')
-        player.queue.clear()
+        player.clear_queue()
         await ctx.send(embed=discord.Embed(description='Queue cleared', color=0xFFC0CB))
 
     @commands.hybrid_command(name='loop')
     async def loop_(self, ctx):
         """Toggle looping (off -> single -> queue)."""
-        player = self.get_cachy_player(ctx.guild)
+        player = self.bot.voice_players.get(ctx.guild.id)
         if not player:
             return await ctx.send('Not connected.')
         if player.loop_mode == 0:
             player.loop_mode = 1
-            player.queue.mode = QueueMode.loop
             text = 'Loop: single'
         elif player.loop_mode == 1:
             player.loop_mode = 2
-            player.queue.mode = QueueMode.loop_all
             text = 'Loop: queue'
         else:
             player.loop_mode = 0
-            player.queue.mode = QueueMode.normal
             text = 'Loop: off'
         await ctx.send(embed=discord.Embed(description=text, color=0xFFC0CB))
 
     @commands.hybrid_command(name='shuffle')
     async def shuffle_(self, ctx):
         """Shuffle the queue."""
-        player = self.get_cachy_player(ctx.guild)
-        if not player or player.queue.is_empty:
+        player = self.bot.voice_players.get(ctx.guild.id)
+        if not player or not player.get_queue():
             return await ctx.send('Queue is empty.')
-        player.queue.shuffle()
+        player.shuffle_queue()
         await ctx.send(embed=discord.Embed(description='Shuffled', color=0xFFC0CB))
 
     @commands.hybrid_command(name='nowplaying', aliases=['np'])
     async def nowplaying_(self, ctx):
         """Show currently playing song."""
-        player = self.get_cachy_player(ctx.guild)
+        player = self.bot.voice_players.get(ctx.guild.id)
         if not player or not player.current:
             return await ctx.send('Nothing playing.')
         track = player.current

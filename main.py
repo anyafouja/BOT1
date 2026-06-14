@@ -1,6 +1,5 @@
 import os
 import discord
-import wavelink
 from discord.ext import commands
 from dotenv import load_dotenv
 
@@ -67,15 +66,6 @@ class CachyBot(commands.Bot):
             print("Loaded extension: cogs.music")
         except Exception as e:
             print(f"Failed to load extension: {e}")
-
-        # Connect to Lavalink
-        lavalink_pass = os.getenv('LAVALINK_PASSWORD', 'youshallnotpass')
-        try:
-            nodes = [wavelink.Node(uri='http://localhost:2333', password=lavalink_pass)]
-            await wavelink.Pool.connect(client=self, nodes=nodes)
-            print("Connected to Lavalink")
-        except Exception as e:
-            print(f"Failed to connect to Lavalink: {e}")
 
         # Sync slash commands
         await self.tree.sync()

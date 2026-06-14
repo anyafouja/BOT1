@@ -17,35 +17,6 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - uses: actions/setup-java@v4
-        with:
-          distribution: temurin
-          java-version: "17"
       - run: pip install -q -r requirements.txt
       - run: echo "DISCORD_TOKEN=${{ secrets.DISCORD_TOKEN }}" > .env
-      - name: download Lavalink
-        run: curl -sL https://github.com/lavalink-devs/Lavalink/releases/download/4.2.2/Lavalink.jar -o Lavalink.jar
-      - name: start Lavalink
-        run: nohup java -Xmx512M -Xms256M -jar Lavalink.jar --plugins.youtube.oauth.refreshToken="${{ secrets.YT_OAUTH_REFRESH}}" > lavalink.log 2>&1 &
-      - name: wait for Lavalink
-        run: |
-          for i in $(seq 1 30); do
-            if curl -s -o /dev/null http://localhost:2333/ 2>/dev/null; then
-              echo "Lavalink ready (port open)"
-              sleep 3
-              if curl -s -o /dev/null http://localhost:2333/ 2>/dev/null; then
-                echo "Confirmed Lavalink still alive after 3s"
-                break
-              fi
-            fi
-            echo "Waiting for Lavalink... ($i)"
-            sleep 2
-          done
-          echo "--- lavalink.log (first 50 lines) ---"
-          head -50 lavalink.log 2>/dev/null || echo "(no lavalink.log)"
-          echo "--- lavalink.log (last 20 lines) ---"
-          tail -20 lavalink.log 2>/dev/null || true
-      - run: |
-          ps aux | grep -i lava | grep -v grep
-          echo "=== Starting bot ==="
-          python3 main.py
+      - run: python3 main.py
