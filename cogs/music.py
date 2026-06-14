@@ -17,6 +17,7 @@ OAUTH_TOKEN_URL = 'https://www.youtube.com/o/oauth2/token'
 
 _oauth_token: str | None = None
 _oauth_expiry: float = 0
+_last_auth_error: str = ''
 
 
 async def refresh_oauth_token() -> str | None:
@@ -47,14 +48,17 @@ async def refresh_oauth_token() -> str | None:
 
 
 async def refresh_cookies_playwright() -> bool:
+    global _last_auth_error
     try:
         from playwright.async_api import async_playwright
-    except ImportError:
+    except ImportError as e:
+        _last_auth_error = f'playwright not installed: {e}'
         return False
 
     email = os.getenv('GOOGLE_EMAIL', '')
     password = os.getenv('GOOGLE_PASSWORD', '')
     if not email or not password:
+        _last_auth_error = 'GOOGLE_EMAIL or GOOGLE_PASSWORD not set'
         return False
 
     try:
@@ -63,26 +67,47 @@ async def refresh_cookies_playwright() -> bool:
             ctx = await browser.new_context()
             page = await ctx.new_page()
 
-            await page.goto('https://accounts.google.com/signin', wait_until='networkidle')
+            await page.goto('https://accounts.google.com/signin', wait_until='networkidle', timeout=30000)
+            title = await page.title()
+            url = page.url
+            _last_auth_error = f'Page: {title} | {url[:60]}'
 
             email_input = page.locator('input[type="email"]')
+            if not await email_input.is_visible(timeout=5000):
+                await browser.close()
+                _last_auth_error += ' - email field not found'
+                return False
             await email_input.fill(email)
             await page.locator('#identifierNext').click()
-            await asyncio.sleep(2)
-
-            pw_input = page.locator('input[type="password"]')
-            await pw_input.wait_for(state='visible', timeout=10000)
-            await pw_input.fill(password)
-            await page.locator('#passwordNext').click()
             await asyncio.sleep(3)
 
-            await page.goto('https://www.youtube.com/', wait_until='networkidle')
-            await asyncio.sleep(2)
+            pw_input = page.locator('input[type="password"]')
+            if not await pw_input.is_visible(timeout=10000):
+                await browser.close()
+                _last_auth_error += ' - password field not found'
+                return False
+            await pw_input.fill(password)
+            await page.locator('#passwordNext').click()
+            await asyncio.sleep(5)
+
+            _last_auth_error += f' -> {page.url[:60]}'
+
+            if 'myaccount' in page.url or 'signin' in page.url.lower():
+                _last_auth_error += ' - login failed or 2FA required'
+                await browser.close()
+                return False
+
+            await page.goto('https://www.youtube.com/', wait_until='networkidle', timeout=30000)
+            await asyncio.sleep(3)
 
             cookies = await ctx.cookies()
             if not cookies:
+                _last_auth_error += ' - no cookies from youtube'
                 await browser.close()
                 return False
+
+            has_session = any('SID' in c['name'] or 'PSID' in c['name'] for c in cookies)
+            _last_auth_error = f'Login OK, {len(cookies)} cookies, has_session={has_session}'
 
             now = int(time.time())
             expiry = now + 86400 * 365
@@ -104,7 +129,8 @@ async def refresh_cookies_playwright() -> bool:
 
             await browser.close()
             return True
-    except Exception:
+    except Exception as e:
+        _last_auth_error = f'Playwright error: {type(e).__name__}: {e}'
         return False
 
 
@@ -255,7 +281,11 @@ class MusicPlayer:
         self.current = track
         url = await track.get_url()
         if not url:
-            await self.text_channel.send('Failed to get audio URL.')
+            err = _last_auth_error
+            msg = 'Failed to get audio URL.'
+            if err:
+                msg += f' Auth: {err}'
+            await self.text_channel.send(msg)
             return await self._next()
 
         ffmpeg_opts = {
