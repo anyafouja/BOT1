@@ -63,37 +63,59 @@ async def refresh_cookies_playwright() -> bool:
 
     try:
         async with async_playwright() as p:
-            browser = await p.chromium.launch(headless=True)
-            ctx = await browser.new_context()
+            browser = await p.chromium.launch(
+                headless=True,
+                args=['--no-sandbox', '--disable-blink-features=AutomationControlled'],
+            )
+            ctx = await browser.new_context(
+                viewport={'width': 1920, 'height': 1080},
+                user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36',
+            )
+            await ctx.add_init_script('''
+                Object.defineProperty(navigator, 'webdriver', { get: () => false });
+                window.chrome = { runtime: {} };
+                Object.defineProperty(navigator, 'languages', { get: () => ['en-US', 'en'] });
+            ''')
             page = await ctx.new_page()
 
             await page.goto('https://accounts.google.com/signin', wait_until='networkidle', timeout=30000)
-            title = await page.title()
-            url = page.url
-            _last_auth_error = f'Page: {title} | {url[:60]}'
+            await asyncio.sleep(2)
+            _last_auth_error = f'URL: {page.url[:80]} | Title: {await page.title()}'
 
-            email_input = page.locator('input[type="email"]')
-            if not await email_input.is_visible(timeout=5000):
+            email_selectors = ['input[type="email"]', '#identifierId', 'input[name="identifier"]']
+            email_input = None
+            for sel in email_selectors:
+                el = page.locator(sel)
+                if await el.is_visible(timeout=2000):
+                    email_input = el
+                    break
+            if not email_input:
                 await browser.close()
-                _last_auth_error += ' - email field not found'
+                _last_auth_error += ' - email field not found (tried 3 selectors)'
                 return False
             await email_input.fill(email)
             await page.locator('#identifierNext').click()
             await asyncio.sleep(3)
 
-            pw_input = page.locator('input[type="password"]')
-            if not await pw_input.is_visible(timeout=10000):
+            pw_selectors = ['input[type="password"]', 'input[name="Passwd"]', '#password']
+            pw_input = None
+            for sel in pw_selectors:
+                el = page.locator(sel)
+                if await el.is_visible(timeout=3000):
+                    pw_input = el
+                    break
+            if not pw_input:
                 await browser.close()
-                _last_auth_error += ' - password field not found'
+                _last_auth_error += ' - password field not found (tried 3 selectors)'
                 return False
             await pw_input.fill(password)
             await page.locator('#passwordNext').click()
             await asyncio.sleep(5)
 
-            _last_auth_error += f' -> {page.url[:60]}'
+            _last_auth_error += f' -> {page.url[:80]}'
 
-            if 'myaccount' in page.url or 'signin' in page.url.lower():
-                _last_auth_error += ' - login failed or 2FA required'
+            if 'myaccount' in page.url or 'signin' in page.url.lower() or 'challenge' in page.url.lower():
+                _last_auth_error += ' - 2FA/challenge required'
                 await browser.close()
                 return False
 
