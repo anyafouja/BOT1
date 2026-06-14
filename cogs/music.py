@@ -188,19 +188,16 @@ def _extract_info(url: str) -> dict:
         if 'Sign in to confirm' in yt_error or 'bot' in yt_error.lower():
             query = original_query
             
-            # Try all 10 Piped instances
-            piped_errors = []
-            for piped_inst in PIPED_INSTANCES:
-                try:
-                    if is_search:
-                        return _piped_search(query)
-                    else:
-                        video_id = _extract_video_id(url)
-                        if video_id:
-                            return _piped_get_video(video_id)
-                except Exception as pe:
-                    piped_errors.append(f'{piped_inst}: {str(pe)[:30]}')
-                    continue
+            # Try Piped (internally loops through all instances)
+            try:
+                if is_search:
+                    return _piped_search(query)
+                else:
+                    video_id = _extract_video_id(url)
+                    if video_id:
+                        return _piped_get_video(video_id)
+            except Exception as piped_error:
+                pass
             
             # Try Invidious
             try:
