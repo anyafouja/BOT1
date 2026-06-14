@@ -112,9 +112,13 @@ async def search_youtube(query: str) -> list[dict]:
     return results
 
 
+_last_youtube_error: str | None = None
+
 async def get_audio_url(video_id: str) -> str | None:
+    global _last_youtube_error
     token = await refresh_oauth_token()
     if not token:
+        _last_youtube_error = 'OAuth token refresh returned no token'
         return None
 
     async with aiohttp.ClientSession() as session:
@@ -131,18 +135,25 @@ async def get_audio_url(video_id: str) -> str | None:
         async with session.post(INNERTUBE_API, json=payload, headers=headers) as resp:
             data = await resp.json()
 
-    err = data.get('error')
-    if err:
-        print(f'[YT_ERROR] InnerTube player error: {err}')
+    api_err = data.get('error')
+    if api_err:
+        _last_youtube_error = f'InnerTube player error: {api_err}'
+        return None
+
     sd = data.get('streamingData') or {}
     if not sd:
-        print(f'[YT_ERROR] No streamingData in response. Keys: {list(data.keys())[:10]}')
+        keys = list(data.keys())[:10]
+        _last_youtube_error = f'No streamingData in response. Keys: {keys}'
+        if 'responseContext' in data:
+            sv = data['responseContext'].get('serviceTrackingParams', [])
+            if sv:
+                _last_youtube_error += f' serviceTracking: {len(sv)} entries'
         return None
 
     fmts = sd.get('adaptiveFormats', []) + sd.get('formats', [])
 
     if not fmts:
-        print('[YT_ERROR] No formats in streamingData')
+        _last_youtube_error = 'No formats in streamingData'
         return None
 
     def sort_key(f):
@@ -163,6 +174,7 @@ async def get_audio_url(video_id: str) -> str | None:
         url = f.get('url', '')
         if url:
             return url
+    _last_youtube_error = f'No usable URL in {len(fmts)} formats'
     return None
 
 
@@ -234,7 +246,8 @@ class MusicPlayer:
         self.current = track
         url = await track.get_url()
         if not url:
-            await self.text_channel.send('Failed to get audio URL (check bot logs).')
+            err_msg = _last_youtube_error or 'Unknown error'
+            await self.text_channel.send(f'Failed to get audio URL: {err_msg}')
             return await self._next()
 
         ffmpeg_opts = {
