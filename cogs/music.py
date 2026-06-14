@@ -151,89 +151,35 @@ def _piped_get_video(video_id: str) -> dict:
 
 
 def _extract_info(url: str) -> dict:
-    # Try yt-dlp first
+    """Extract info from URL or search query. Uses SoundCloud for searches."""
     is_search = not re.match(r'https?://', url)
-    if is_search:
-        url = 'ytsearch:' + url
     
-    cookie_file = os.environ.get('YT_COOKIES_FILE') or 'cookies.txt'
     opts = {
         'format': 'bestaudio/best',
-        'default_search': 'auto',
         'quiet': True,
         'no_warnings': True,
-        'extractor_retries': 10,
         'socket_timeout': 30,
-        'impersonate': ImpersonateTarget.from_str('chrome-116:windows-10'),
     }
-    if os.path.isfile(cookie_file):
-        opts['cookiefile'] = cookie_file
     
     try:
+        if is_search:
+            # Use SoundCloud search for queries (fast & reliable)
+            search_url = 'scsearch:' + url
+        else:
+            # Direct URL - supports YouTube, SoundCloud, Bandcamp, etc.
+            search_url = url
+        
         ydl = YoutubeDL(opts)
-        data = ydl.extract_info(url, download=False)
+        data = ydl.extract_info(search_url, download=False)
+        
         if 'entries' in data:
+            if not data['entries']:
+                raise RuntimeError('No results found')
             data = data['entries'][0]
+        
         return data
     except Exception as e:
-        error_msg = str(e)
-        # If blocked by YouTube, fall back to Invidious
-        if 'Sign in to confirm' in error_msg or 'bot' in error_msg.lower():
-            try:
-                if is_search:
-                    # Extract search query (remove 'ytsearch:' prefix)
-                    query = url.replace('ytsearch:', '')
-                    return _invidious_search(query)
-                else:
-                    # Extract video ID from URL
-                    video_id = _extract_video_id(url)
-                    if video_id:
-                        return _invidious_get_video(video_id)
-                    raise RuntimeError('Invalid YouTube URL')
-            except Exception as inv_error:
-                # If Invidious fails, try Piped
-                try:
-                    if is_search:
-                        query = url.replace('ytsearch:', '')
-                        return _piped_search(query)
-                    else:
-                        video_id = _extract_video_id(url)
-                        if video_id:
-                            return _piped_get_video(video_id)
-                        raise RuntimeError('Invalid YouTube URL')
-                except Exception as piped_error:
-                    # If Piped fails and it's a search, try SoundCloud
-                    if is_search:
-                        try:
-                            query = url.replace('ytsearch:', '')
-                            sc_url = 'scsearch:' + query
-                            opts_sc = {
-                                'format': 'bestaudio/best',
-                                'quiet': True,
-                                'no_warnings': True,
-                                'socket_timeout': 30,
-                            }
-                            ydl_sc = YoutubeDL(opts_sc)
-                            sc_data = ydl_sc.extract_info(sc_url, download=False)
-                            if 'entries' in sc_data and sc_data['entries']:
-                                return sc_data['entries'][0]
-                            raise RuntimeError('No SoundCloud results')
-                        except Exception as sc_error:
-                            raise RuntimeError(
-                                f'All sources failed - '
-                                f'YouTube: {error_msg}; '
-                                f'Invidious: {inv_error}; '
-                                f'Piped: {piped_error}; '
-                                f'SoundCloud: {sc_error}'
-                            )
-                    else:
-                        raise RuntimeError(
-                            f'All YouTube methods failed - '
-                            f'yt-dlp: {error_msg}; '
-                            f'Invidious: {inv_error}; '
-                            f'Piped: {piped_error}'
-                        )
-        raise RuntimeError(error_msg)
+        raise RuntimeError(f'Failed to extract info: {e}')
 
 
 class YTDLSource(discord.PCMVolumeTransformer):
@@ -607,7 +553,7 @@ class Music(commands.Cog):
     async def help_(self, ctx):
         """Shows all commands."""
         cmds = [
-            ('play <query>', 'Plays songs from YouTube, SoundCloud & more'),
+            ('play <query>', 'Search & play songs from SoundCloud'),
             ('skip', 'Skips the current song'),
             ('stop', 'Stops playback and disconnects'),
             ('pause', 'Pauses playback'),
@@ -621,7 +567,7 @@ class Music(commands.Cog):
         ]
         embed = discord.Embed(title='Cachy Music', color=0xFFC0CB)
         embed.description = '\n\n'.join(f'**cachy {cmd}**\n{desc}' for cmd, desc in cmds)
-        embed.set_footer(text='Multi-source: YouTube, SoundCloud, Bandcamp & more')
+        embed.set_footer(text='Powered by SoundCloud | Supports direct URLs')
         await ctx.send(embed=embed)
 
     @commands.hybrid_command(name='ping')
