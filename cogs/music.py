@@ -113,6 +113,7 @@ async def search_youtube(query: str) -> list[dict]:
 
 
 _last_youtube_error: str | None = None
+_youtube_errors: list[str] = []
 
 INNERTUBE_CLIENTS = [
     {'clientName': 'ANDROID', 'clientVersion': '19.09.37'},
@@ -122,7 +123,7 @@ INNERTUBE_CLIENTS = [
     {'clientName': 'TVHTML5', 'clientVersion': '7.20201028'},
 ]
 
-async def _try_player(video_id: str, client: dict, token: str | None = None) -> dict | None:
+async def _try_player(video_id: str, client: dict, token: str | None = None) -> dict:
     payload = {
         'context': {'client': client},
         'videoId': video_id,
@@ -136,7 +137,8 @@ async def _try_player(video_id: str, client: dict, token: str | None = None) -> 
 
 
 async def get_audio_url(video_id: str) -> str | None:
-    global _last_youtube_error
+    global _last_youtube_error, _youtube_errors
+    _youtube_errors = []
 
     token = await refresh_oauth_token()
 
@@ -146,22 +148,30 @@ async def get_audio_url(video_id: str) -> str | None:
 
         api_err = data.get('error')
         if api_err:
-            _last_youtube_error = f'{cn} error: {api_err}'
+            msg = f'{cn}: API error {api_err}'
+            _youtube_errors.append(msg)
             continue
 
         ps = data.get('playabilityStatus', {})
         if ps.get('status') != 'OK':
-            _last_youtube_error = f'{cn}: {ps.get("status")} - {ps.get("reason", "")}'
+            reason = ps.get('reason', '')
+            subreason = ''
+            es = ps.get('errorScreen', {})
+            pmr = es.get('playerErrorMessageRenderer', {})
+            if pmr:
+                subreason = ' '.join(r.get('text', '') for r in pmr.get('reason', {}).get('runs', []))
+            msg = f'{cn}: {ps.get("status")} - {reason} | {subreason}'
+            _youtube_errors.append(msg)
             continue
 
         sd = data.get('streamingData')
         if not sd:
-            _last_youtube_error = f'{cn}: no streamingData'
+            _youtube_errors.append(f'{cn}: no streamingData')
             continue
 
         fmts = sd.get('adaptiveFormats', []) + sd.get('formats', [])
         if not fmts:
-            _last_youtube_error = f'{cn}: no formats'
+            _youtube_errors.append(f'{cn}: no formats')
             continue
 
         def sort_key(f):
@@ -183,8 +193,9 @@ async def get_audio_url(video_id: str) -> str | None:
             if url:
                 return url
 
-        _last_youtube_error = f'{cn}: no usable URL in {len(fmts)} formats'
+        _youtube_errors.append(f'{cn}: no usable URL in {len(fmts)} formats')
 
+    _last_youtube_error = ' | '.join(_youtube_errors)
     return None
 
 
