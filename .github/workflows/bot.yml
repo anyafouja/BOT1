@@ -19,4 +19,7 @@ jobs:
           python-version: "3.12"
       - run: pip install -q -r requirements.txt
       - run: echo "DISCORD_TOKEN=${{ secrets.DISCORD_TOKEN }}" > .env
+      - run: printf "%s" "${{ secrets.YT_COOKIES }}" | base64 -d > cookies.txt
       - run: python3 main.py
+        env:
+          YT_COOKIES_FILE: cookies.txt

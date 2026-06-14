@@ -4,8 +4,8 @@ import random
 import itertools
 import os
 import json
-import subprocess
 from discord.ext import commands
+from yt_dlp import YoutubeDL, cookies
 
 FFMPEG_OPTIONS = {
     'before_options': (
@@ -21,16 +21,30 @@ FFMPEG_OPTIONS = {
 def _extract_info(url: str) -> dict:
     import re
     if not re.match(r'https?://', url):
-        url = 'scsearch:' + url
-    cmd = [
-        'yt-dlp', '-f', 'http_mp3_0_0', '-j',
-        '--no-playlist', '--quiet', url,
-    ]
+        url = 'ytsearch:' + url
+    cookie_file = os.environ.get('YT_COOKIES_FILE') or 'cookies.txt'
+    if not os.path.isfile(cookie_file):
+        cookie_file = None
+    opts = {
+        'format': 'bestaudio',
+        'default_search': 'auto',
+        'quiet': True,
+        'no_warnings': True,
+        'extractor_retries': 10,
+        'file_access_retries': 5,
+        'fragment_retries': 5,
+        'socket_timeout': 30,
+    }
+    ydl = YoutubeDL(opts)
+    if cookie_file:
+        try:
+            cookies.load_cookies(cookie_file, None, ydl)
+        except Exception:
+            pass
     try:
-        out = subprocess.check_output(cmd, text=True, timeout=30, stderr=subprocess.PIPE)
-    except subprocess.CalledProcessError as e:
-        raise RuntimeError(e.stderr.strip() or str(e))
-    data = json.loads(out.strip())
+        data = ydl.extract_info(url, download=False)
+    except Exception as e:
+        raise RuntimeError(str(e))
     if 'entries' in data:
         data = data['entries'][0]
     return data
@@ -305,7 +319,7 @@ class Music(commands.Cog):
 
     @commands.hybrid_command(name='play', aliases=['p'])
     async def play_(self, ctx, *, search: str):
-        """Plays a song from SoundCloud."""
+        """Plays a song from YouTube."""
         async with ctx.typing():
             vc = ctx.voice_client
             if not vc:
@@ -407,7 +421,7 @@ class Music(commands.Cog):
     async def help_(self, ctx):
         """Shows all commands."""
         cmds = [
-            ('play <query>', 'Plays a song from SoundCloud'),
+            ('play <query>', 'Plays a song from YouTube'),
             ('skip', 'Skips the current song'),
             ('stop', 'Stops playback and disconnects'),
             ('pause', 'Pauses playback'),
@@ -421,7 +435,7 @@ class Music(commands.Cog):
         ]
         embed = discord.Embed(title='Cachy Music', color=0xFFC0CB)
         embed.description = '\n\n'.join(f'**cachy {cmd}**\n{desc}' for cmd, desc in cmds)
-        embed.set_footer(text='Powered by SoundCloud')
+        embed.set_footer(text='Powered by YouTube')
         await ctx.send(embed=embed)
 
     @commands.hybrid_command(name='ping')
