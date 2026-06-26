@@ -300,30 +300,30 @@ class Music(commands.Cog):
     @commands.hybrid_command(name='play', aliases=['p'])
     async def play_(self, ctx, *, search: str):
         """Plays a song from YouTube or SoundCloud."""
+        await ctx.defer()
         if not await self._ensure_voice(ctx):
             return
 
         vc = ctx.voice_client
 
-        async with ctx.typing():
-            try:
+        try:
+            tracks = await wavelink.Playable.search(
+                search,
+                source=wavelink.TrackSource.YouTube,
+            )
+            if not tracks:
+                # Fallback to SoundCloud
                 tracks = await wavelink.Playable.search(
                     search,
-                    source=wavelink.TrackSource.YouTube,
+                    source=wavelink.TrackSource.SC,
                 )
-                if not tracks:
-                    # Fallback to SoundCloud
-                    tracks = await wavelink.Playable.search(
-                        search,
-                        source=wavelink.TrackSource.SC,
-                    )
-                if not tracks:
-                    return await ctx.send('No results found.')
+            if not tracks:
+                return await ctx.send('No results found.')
 
-                track = tracks if isinstance(tracks, wavelink.Playlist) else tracks[0]
+            track = tracks if isinstance(tracks, wavelink.Playlist) else tracks[0]
 
-            except Exception as e:
-                return await ctx.send(f'Search failed: `{e}`')
+        except Exception as e:
+            return await ctx.send(f'Search failed: `{e}`')
 
         player = await self.get_player(ctx)
 
@@ -345,6 +345,7 @@ class Music(commands.Cog):
     @commands.hybrid_command(name='skip', aliases=['s'])
     async def skip_(self, ctx):
         """Skips the current song."""
+        await ctx.defer()
         if not await self._ensure_node(ctx): return
         vc = ctx.voice_client
         if not vc or not (getattr(vc, 'playing', False) or getattr(vc, 'paused', False)):
@@ -358,6 +359,7 @@ class Music(commands.Cog):
     @commands.hybrid_command(name='stop')
     async def stop_(self, ctx):
         """Stops playback and disconnects the bot."""
+        await ctx.defer()
         if not await self._ensure_node(ctx): return
         vc = ctx.voice_client
         if not vc or not vc.connected:
@@ -368,6 +370,7 @@ class Music(commands.Cog):
     @commands.hybrid_command(name='pause')
     async def pause_(self, ctx):
         """Pauses the music."""
+        await ctx.defer()
         if not await self._ensure_node(ctx): return
         vc = ctx.voice_client
         if not vc or not isinstance(vc, wavelink.Player):
@@ -381,6 +384,7 @@ class Music(commands.Cog):
     @commands.hybrid_command(name='resume')
     async def resume_(self, ctx):
         """Resumes the paused music."""
+        await ctx.defer()
         if not await self._ensure_node(ctx): return
         vc = ctx.voice_client
         if not vc or not isinstance(vc, wavelink.Player):
@@ -406,6 +410,7 @@ class Music(commands.Cog):
     @commands.hybrid_command(name='volume', aliases=['vol'])
     async def change_volume(self, ctx, vol: int):
         """Changes the bot volume (1-100)."""
+        await ctx.defer()
         if not await self._ensure_node(ctx): return
         vc = ctx.voice_client
         if not vc or not isinstance(vc, wavelink.Player):
