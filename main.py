@@ -7,10 +7,8 @@ import wavelink
 
 load_dotenv()
 TOKEN = os.getenv('DISCORD_TOKEN')
-
 LAVALINK_URI = os.getenv('LAVALINK_URI', 'lavalink.triniumhost.com:4333')
 LAVALINK_PASSWORD = os.getenv('LAVALINK_PASSWORD', 'free')
-LAVALINK_SECURE = os.getenv('LAVALINK_SECURE', 'false').lower() == 'true'
 
 intents = discord.Intents.default()
 intents.message_content = True
@@ -19,32 +17,48 @@ intents.voice_states = True
 
 class CachyBot(commands.Bot):
     def __init__(self):
-        super().__init__(
-            command_prefix="cachy ",
-            intents=intents,
-            help_command=None,
-        )
+        super().__init__(command_prefix="cachy ",
+                         intents=intents, help_command=None)
+        self._connecting = False
 
     async def setup_hook(self):
         await self.load_extension('cogs.music')
-        print("Loaded extension: cogs.music")
-
-        nodes = [
-            wavelink.Node(
-                uri=f"ws://{LAVALINK_URI}",
-                password=LAVALINK_PASSWORD,
-            )
-        ]
-        try:
-            await asyncio.wait_for(wavelink.Pool.connect(nodes=nodes, client=self), timeout=15)
-            print(f"Connected to Lavalink: {LAVALINK_URI}")
-        except asyncio.TimeoutError:
-            print(f"Lavalink connection timeout (15s) to {LAVALINK_URI} — bot will retry on next play")
-        except Exception as e:
-            print(f"Lavalink connect failed: {e}")
-
+        print("Loaded: cogs.music")
         await self.tree.sync()
         print("Synced slash commands.")
+
+    async def _connect_lavalink(self):
+        if self._connecting:
+            return
+        self._connecting = True
+        nodes = [wavelink.Node(uri=f"ws://{LAVALINK_URI}",
+                               password=LAVALINK_PASSWORD)]
+        for i in range(3):
+            try:
+                await asyncio.wait_for(
+                    wavelink.Pool.connect(nodes=nodes, client=self), timeout=20)
+                print(f"Lavalink OK: {LAVALINK_URI}")
+                return
+            except asyncio.TimeoutError:
+                print(f"Lavalink timeout ({i+1}/3)")
+            except Exception as e:
+                print(f"Lavalink error ({i+1}/3): {e}")
+            await asyncio.sleep(3)
+        self._connecting = False
+        print("Lavalink failed — will retry on play command.")
+
+    async def ensure_node(self):
+        ok = any(n.status == wavelink.NodeStatus.CONNECTED
+                 for n in wavelink.Pool.get_nodes())
+        if ok:
+            return True
+        self._connecting = False
+        try:
+            await asyncio.wait_for(self._connect_lavalink(), timeout=70)
+            return any(n.status == wavelink.NodeStatus.CONNECTED
+                       for n in wavelink.Pool.get_nodes())
+        except Exception:
+            return False
 
 
 bot = CachyBot()
@@ -52,8 +66,9 @@ bot = CachyBot()
 
 @bot.event
 async def on_ready():
-    print(f'Logged in as {bot.user.name} (ID: {bot.user.id})')
+    print(f'Logged in as {bot.user.name} ({bot.user.id})')
     print('------')
+    asyncio.create_task(bot._connect_lavalink())
 
 
 @bot.event
@@ -66,11 +81,11 @@ async def on_command_error(ctx, error):
     if isinstance(error, commands.CommandNotFound):
         return
     print(f"Error: {error}")
-    await ctx.send(f"An error occurred: {error}")
+    await ctx.send(f"Error: {error}")
 
 
 if __name__ == "__main__":
     if not TOKEN:
-        print("Error: DISCORD_TOKEN not found in .env file.")
+        print("No DISCORD_TOKEN")
     else:
         bot.run(TOKEN)

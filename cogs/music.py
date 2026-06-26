@@ -266,6 +266,10 @@ class Music(commands.Cog):
         vc = ctx.voice_client
         if not vc or not isinstance(vc, wavelink.Player):
             if ctx.author.voice:
+                # Ensure Lavalink node before connecting voice
+                if not await self.bot.ensure_node():
+                    await ctx.send('Lavalink node unavailable — try again later.')
+                    return False
                 try:
                     await ctx.author.voice.channel.edit(rtc_region='singapore')
                 except Exception:
@@ -276,6 +280,12 @@ class Music(commands.Cog):
                 return False
         elif ctx.author.voice and vc.channel != ctx.author.voice.channel:
             await vc.move_to(ctx.author.voice.channel)
+        return True
+
+    async def _ensure_node(self, ctx) -> bool:
+        if not await self.bot.ensure_node():
+            await ctx.send('Lavalink node unavailable — try again later.')
+            return False
         return True
 
     @commands.hybrid_command(name='play', aliases=['p'])
@@ -326,6 +336,7 @@ class Music(commands.Cog):
     @commands.hybrid_command(name='skip', aliases=['s'])
     async def skip_(self, ctx):
         """Skips the current song."""
+        if not await self._ensure_node(ctx): return
         vc = ctx.voice_client
         if not vc or not (getattr(vc, 'playing', False) or getattr(vc, 'paused', False)):
             return await ctx.send('Nothing is playing.')
@@ -338,6 +349,7 @@ class Music(commands.Cog):
     @commands.hybrid_command(name='stop')
     async def stop_(self, ctx):
         """Stops playback and disconnects the bot."""
+        if not await self._ensure_node(ctx): return
         vc = ctx.voice_client
         if not vc or not vc.connected:
             return await ctx.send('Not connected.')
@@ -347,6 +359,7 @@ class Music(commands.Cog):
     @commands.hybrid_command(name='pause')
     async def pause_(self, ctx):
         """Pauses the music."""
+        if not await self._ensure_node(ctx): return
         vc = ctx.voice_client
         if not vc or not isinstance(vc, wavelink.Player):
             return await ctx.send('Not connected to Lavalink.')
@@ -359,6 +372,7 @@ class Music(commands.Cog):
     @commands.hybrid_command(name='resume')
     async def resume_(self, ctx):
         """Resumes the paused music."""
+        if not await self._ensure_node(ctx): return
         vc = ctx.voice_client
         if not vc or not isinstance(vc, wavelink.Player):
             return await ctx.send('Not connected.')
@@ -383,6 +397,7 @@ class Music(commands.Cog):
     @commands.hybrid_command(name='volume', aliases=['vol'])
     async def change_volume(self, ctx, vol: int):
         """Changes the bot volume (1-100)."""
+        if not await self._ensure_node(ctx): return
         vc = ctx.voice_client
         if not vc or not isinstance(vc, wavelink.Player):
             return await ctx.send('Not connected.')
