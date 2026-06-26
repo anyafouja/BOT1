@@ -13,6 +13,7 @@ LAVALINK_PASSWORD = os.getenv('LAVALINK_PASSWORD', 'free')
 intents = discord.Intents.default()
 intents.message_content = True
 intents.voice_states = True
+intents.members = True
 
 
 class CachyBot(commands.Bot):

@@ -265,16 +265,25 @@ class Music(commands.Cog):
     async def _ensure_voice(self, ctx) -> bool:
         vc = ctx.voice_client
         if not vc or not isinstance(vc, wavelink.Player):
+            # Find user's voice channel — search guild directly (no cache dependency)
+            target = None
             if ctx.author.voice:
+                target = ctx.author.voice.channel
+            else:
+                for ch in ctx.guild.voice_channels:
+                    if ctx.author in ch.members:
+                        target = ch
+                        break
+            if target:
                 # Ensure Lavalink node before connecting voice
                 if not await self.bot.ensure_node():
                     await ctx.send('Lavalink node unavailable — try again later.')
                     return False
                 try:
-                    await ctx.author.voice.channel.edit(rtc_region='singapore')
+                    await target.edit(rtc_region='singapore')
                 except Exception:
                     pass
-                vc = await ctx.author.voice.channel.connect(cls=wavelink.Player, reconnect=True)
+                vc = await target.connect(cls=wavelink.Player, reconnect=True)
             else:
                 await ctx.send('You are not connected to a voice channel.')
                 return False
