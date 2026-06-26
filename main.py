@@ -49,14 +49,14 @@ class CachyBot(commands.Bot):
 
     async def ensure_node(self):
         ok = any(n.status == wavelink.NodeStatus.CONNECTED
-                 for n in wavelink.Pool.get_nodes())
+                 for n in wavelink.Pool.nodes)
         if ok:
             return True
         self._connecting = False
         try:
             await asyncio.wait_for(self._connect_lavalink(), timeout=70)
             return any(n.status == wavelink.NodeStatus.CONNECTED
-                       for n in wavelink.Pool.get_nodes())
+                       for n in wavelink.Pool.nodes)
         except Exception:
             return False
 
