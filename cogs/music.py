@@ -301,17 +301,26 @@ class Music(commands.Cog):
                 if not tracks:
                     return await ctx.send('No results found.')
 
-                track = tracks[0] if isinstance(tracks, list) else tracks
+                track = tracks if isinstance(tracks, wavelink.Playlist) else tracks[0]
+
             except Exception as e:
                 return await ctx.send(f'Search failed: `{e}`')
 
         player = await self.get_player(ctx)
-        await player.queue.put(track)
 
-        embed = discord.Embed(title='Added to Queue', color=0xFFC0CB)
-        embed.description = f'[{track.title}]({track.uri})'
-        if track.artwork:
-            embed.set_thumbnail(url=track.artwork)
+        if isinstance(track, wavelink.Playlist):
+            for t in track.tracks:
+                await player.queue.put(t)
+            embed = discord.Embed(title='Added Playlist', color=0xFFC0CB)
+            embed.description = f'[{track.name}]({track.url}) — {len(track.tracks)} tracks'
+            if track.artwork:
+                embed.set_thumbnail(url=track.artwork)
+        else:
+            await player.queue.put(track)
+            embed = discord.Embed(title='Added to Queue', color=0xFFC0CB)
+            embed.description = f'[{track.title}]({track.uri})'
+            if track.artwork:
+                embed.set_thumbnail(url=track.artwork)
         await ctx.send(embed=embed)
 
     @commands.hybrid_command(name='skip', aliases=['s'])
