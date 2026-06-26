@@ -276,7 +276,7 @@ class Music(commands.Cog):
                         break
             if target:
                 # Ensure Lavalink node before connecting voice
-                if not await self.bot.ensure_node():
+                if not await self.bot._ensure_lavalink():
                     await ctx.send('Lavalink node unavailable — try again later.')
                     return False
                 try:
@@ -292,7 +292,7 @@ class Music(commands.Cog):
         return True
 
     async def _ensure_node(self, ctx) -> bool:
-        if not await self.bot.ensure_node():
+        if not await self.bot._ensure_lavalink():
             await ctx.send('Lavalink node unavailable — try again later.')
             return False
         return True

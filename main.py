@@ -22,44 +22,73 @@ class CachyBot(commands.Bot):
                          intents=intents, help_command=None)
         self._connecting = False
 
-    async def setup_hook(self):
-        await self.load_extension('cogs.music')
-        print("Loaded: cogs.music")
-        await self.tree.sync()
-        print("Synced slash commands.")
+    async def _ensure_lavalink(self):
+        """Make sure at least one node CONNECTED. Reconnect if needed."""
+        # Check if any node already connected
+        for n in wavelink.Pool.nodes:
+            if n.status == wavelink.NodeStatus.CONNECTED:
+                return True
 
-    async def _connect_lavalink(self):
         if self._connecting:
-            return
+            # Already trying — wait up to 30s for it
+            for _ in range(30):
+                await asyncio.sleep(1)
+                for n in wavelink.Pool.nodes:
+                    if n.status == wavelink.NodeStatus.CONNECTED:
+                        return True
+            return False
+
         self._connecting = True
-        nodes = [wavelink.Node(uri=f"ws://{LAVALINK_URI}",
-                               password=LAVALINK_PASSWORD)]
+
+        # If pool has nodes, reconnect them
+        if wavelink.Pool.nodes:
+            try:
+                for n in wavelink.Pool.nodes:
+                    await asyncio.wait_for(n.connect(client=self), timeout=20)
+                for _ in range(15):
+                    await asyncio.sleep(1)
+                    for n in wavelink.Pool.nodes:
+                        if n.status == wavelink.NodeStatus.CONNECTED:
+                            self._connecting = False
+                            print(f"Lavalink reconnected: {LAVALINK_URI}")
+                            return True
+            except Exception:
+                pass
+
+        # Fresh connect
+        self._connecting = False  # reset for Pool.connect call
+        node = wavelink.Node(uri=f"ws://{LAVALINK_URI}", password=LAVALINK_PASSWORD)
         for i in range(3):
             try:
                 await asyncio.wait_for(
-                    wavelink.Pool.connect(nodes=nodes, client=self), timeout=20)
-                print(f"Lavalink OK: {LAVALINK_URI}")
-                return
+                    wavelink.Pool.connect(nodes=[node], client=self), timeout=20)
+                # Wait for CONNECTED status
+                for _ in range(15):
+                    await asyncio.sleep(1)
+                    for n in wavelink.Pool.nodes:
+                        if n.status == wavelink.NodeStatus.CONNECTED:
+                            self._connecting = False
+                            print(f"Lavalink connected: {LAVALINK_URI}")
+                            return True
+                # If we get here, connect returned but node still not CONNECTED
+                self._connecting = False
+                return any(n.status == wavelink.NodeStatus.CONNECTED
+                          for n in wavelink.Pool.nodes)
             except asyncio.TimeoutError:
                 print(f"Lavalink timeout ({i+1}/3)")
             except Exception as e:
                 print(f"Lavalink error ({i+1}/3): {e}")
             await asyncio.sleep(3)
-        self._connecting = False
-        print("Lavalink failed — will retry on play command.")
 
-    async def ensure_node(self):
-        ok = any(n.status == wavelink.NodeStatus.CONNECTED
-                 for n in wavelink.Pool.nodes)
-        if ok:
-            return True
         self._connecting = False
-        try:
-            await asyncio.wait_for(self._connect_lavalink(), timeout=70)
-            return any(n.status == wavelink.NodeStatus.CONNECTED
-                       for n in wavelink.Pool.nodes)
-        except Exception:
-            return False
+        print("Lavalink failed after 3 attempts")
+        return False
+
+    async def setup_hook(self):
+        await self.load_extension('cogs.music')
+        print("Loaded: cogs.music")
+        await self.tree.sync()
+        print("Synced slash commands.")
 
 
 bot = CachyBot()
@@ -69,7 +98,7 @@ bot = CachyBot()
 async def on_ready():
     print(f'Logged in as {bot.user.name} ({bot.user.id})')
     print('------')
-    asyncio.create_task(bot._connect_lavalink())
+    asyncio.create_task(bot._ensure_lavalink())
 
 
 @bot.event
