@@ -2,14 +2,9 @@ import asyncio
 import discord
 import random
 import itertools
-import os
-import json
-import re
-import urllib.request
-import urllib.parse
 from discord.ext import commands
-from yt_dlp import YoutubeDL
-from yt_dlp.networking.impersonate import ImpersonateTarget
+import wavelink
+
 
 FFMPEG_OPTIONS = {
     'before_options': (
@@ -20,254 +15,6 @@ FFMPEG_OPTIONS = {
     ),
     'options': '-vn',
 }
-
-INVIDIOUS_INSTANCES = [
-    'inv.thepixora.com',
-]
-
-PIPED_INSTANCES = [
-    'pipedapi.kavin.rocks',
-    'pipedapi-libre.kavin.rocks',
-    'pipedapi.pfcd.me',
-    'api.piped.privacydev.net',
-    'pipedapi.palveluntarjoaja.eu',
-    'pipedapi.aeong.one',
-    'pipedapi.leptons.xyz',
-    'pipedapi.moomoo.me',
-    'piped-api.garudalinux.org',
-    'pipedapi.adminforge.de',
-]
-
-
-def _extract_video_id(url: str) -> str:
-    """Extract YouTube video ID from URL."""
-    patterns = [
-        r'(?:v=|\/)([0-9A-Za-z_-]{11}).*',
-        r'(?:embed\/)([0-9A-Za-z_-]{11})',
-        r'^([0-9A-Za-z_-]{11})$',
-    ]
-    for pattern in patterns:
-        match = re.search(pattern, url)
-        if match:
-            return match.group(1)
-    return None
-
-
-def _invidious_api(endpoint: str, instance_idx: int = 0) -> dict:
-    """Query Invidious API with fallback to other instances."""
-    for i in range(len(INVIDIOUS_INSTANCES)):
-        idx = (instance_idx + i) % len(INVIDIOUS_INSTANCES)
-        instance = INVIDIOUS_INSTANCES[idx]
-        try:
-            url = f'https://{instance}{endpoint}'
-            req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
-            with urllib.request.urlopen(req, timeout=10) as response:
-                return json.loads(response.read().decode())
-        except Exception:
-            continue
-    raise RuntimeError('All Invidious instances failed')
-
-
-def _invidious_search(query: str) -> dict:
-    """Search YouTube via Invidious and return first result."""
-    endpoint = f'/api/v1/search?q={urllib.parse.quote(query)}'
-    results = _invidious_api(endpoint)
-    if not results or not isinstance(results, list):
-        raise RuntimeError('No search results')
-    video = next((r for r in results if r.get('type') == 'video'), None)
-    if not video:
-        raise RuntimeError('No video found')
-    return _invidious_get_video(video['videoId'])
-
-
-def _invidious_get_video(video_id: str) -> dict:
-    """Get video info from Invidious and convert to yt-dlp format."""
-    endpoint = f'/api/v1/videos/{video_id}'
-    data = _invidious_api(endpoint)
-    
-    # Find best audio format
-    audio_formats = [f for f in data.get('adaptiveFormats', []) 
-                     if f.get('type', '').startswith('audio/')]
-    if not audio_formats:
-        raise RuntimeError('No audio formats available')
-    
-    # Sort by bitrate, pick best
-    best_audio = max(audio_formats, key=lambda f: f.get('bitrate', 0))
-    
-    # Convert to yt-dlp format
-    thumb = data.get('videoThumbnails', [{}])[0].get('url')
-    if not thumb or not thumb.startswith('http'):
-        thumb = f'https://img.youtube.com/vi/{video_id}/maxresdefault.jpg'
-    return {
-        'id': data.get('videoId'),
-        'title': data.get('title'),
-        'url': best_audio.get('url'),
-        'webpage_url': f'https://www.youtube.com/watch?v={video_id}',
-        'thumbnail': thumb,
-        'duration': data.get('lengthSeconds'),
-        'ext': 'webm' if 'webm' in best_audio.get('type', '') else 'm4a',
-    }
-
-
-def _piped_api(endpoint: str, instance_idx: int = 0, tried_instances: list = None) -> tuple:
-    """Query Piped API with fallback. Returns (data, working_instance_idx)."""
-    if tried_instances is None:
-        tried_instances = []
-    
-    for i in range(len(PIPED_INSTANCES)):
-        idx = (instance_idx + i) % len(PIPED_INSTANCES)
-        if idx in tried_instances:
-            continue
-        instance = PIPED_INSTANCES[idx]
-        try:
-            url = f'https://{instance}{endpoint}'
-            req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
-            with urllib.request.urlopen(req, timeout=10) as response:
-                data = json.loads(response.read().decode())
-                return (data, idx)  # Return data AND working instance index
-        except Exception:
-            tried_instances.append(idx)
-            continue
-    raise RuntimeError('All Piped instances failed')
-
-
-def _piped_search(query: str) -> dict:
-    """Search YouTube via Piped and return first result."""
-    endpoint = f'/search?q={urllib.parse.quote(query)}&filter=music_songs'
-    data, working_idx = _piped_api(endpoint)  # Get working instance index
-    items = data.get('items', [])
-    if not items:
-        raise RuntimeError('No search results')
-    video = items[0]
-    # Use SAME instance for get_video
-    return _piped_get_video(video['url'].split('=')[-1], instance_idx=working_idx)
-
-
-def _piped_get_video(video_id: str, instance_idx: int = 0) -> dict:
-    """Get video info from Piped using specific instance."""
-    endpoint = f'/streams/{video_id}'
-    data, _ = _piped_api(endpoint, instance_idx=instance_idx)  # Use specified instance
-    
-    # Find best audio stream
-    audio_streams = data.get('audioStreams', [])
-    if not audio_streams:
-        raise RuntimeError('No audio streams available')
-    
-    # Sort by bitrate, pick best
-    best_audio = max(audio_streams, key=lambda s: s.get('bitrate', 0))
-    
-    # Convert to yt-dlp format
-    thumbnail = data.get('thumbnailUrl')
-    if not thumbnail or not thumbnail.startswith('http'):
-        thumbnail = f'https://img.youtube.com/vi/{video_id}/maxresdefault.jpg'
-    return {
-        'id': video_id,
-        'title': data.get('title'),
-        'url': best_audio.get('url'),
-        'webpage_url': f'https://www.youtube.com/watch?v={video_id}',
-        'thumbnail': thumbnail,
-        'duration': data.get('duration'),
-        'ext': best_audio.get('format', 'webm').lower(),
-    }
-
-
-def _extract_info(url: str) -> dict:
-    """Extract from YouTube with comprehensive fallbacks (Piped x10, Invidious, SoundCloud)."""
-    is_search = not re.match(r'https?://', url)
-    original_query = url
-    
-    # Try YouTube first via yt-dlp
-    if is_search:
-        url = 'ytsearch:' + url
-    
-    opts = {
-        'format': 'bestaudio/best',
-        'quiet': True,
-        'no_warnings': True,
-        'socket_timeout': 30,
-    }
-    
-    try:
-        ydl = YoutubeDL(opts)
-        data = ydl.extract_info(url, download=False)
-        if 'entries' in data:
-            if not data['entries']:
-                raise RuntimeError('No results')
-            data = data['entries'][0]
-        return data
-    except Exception as e:
-        yt_error = str(e)
-        
-        # If YouTube blocked, try all fallbacks
-        if 'Sign in to confirm' in yt_error or 'bot' in yt_error.lower():
-            query = original_query
-            
-            # Try Piped (internally loops through all instances)
-            try:
-                if is_search:
-                    return _piped_search(query)
-                else:
-                    video_id = _extract_video_id(url)
-                    if video_id:
-                        return _piped_get_video(video_id)
-            except Exception as piped_error:
-                pass
-            
-            # Try Invidious
-            try:
-                if is_search:
-                    return _invidious_search(query)
-                else:
-                    video_id = _extract_video_id(url)
-                    if video_id:
-                        return _invidious_get_video(video_id)
-            except Exception as inv_error:
-                pass
-            
-            # Last resort: SoundCloud (if search only)
-            if is_search:
-                try:
-                    sc_url = 'scsearch:' + query
-                    opts_sc = {
-                        'format': 'bestaudio/best',
-                        'quiet': True,
-                        'no_warnings': True,
-                    }
-                    ydl_sc = YoutubeDL(opts_sc)
-                    sc_data = ydl_sc.extract_info(sc_url, download=False)
-                    if 'entries' in sc_data and sc_data['entries']:
-                        return sc_data['entries'][0]
-                except Exception as sc_error:
-                    pass
-            
-            # All failed
-            raise RuntimeError(
-                f'All methods failed. YouTube blocked from GHA. '
-                f'Tried: yt-dlp, {len(PIPED_INSTANCES)} Piped instances, Invidious, SoundCloud'
-            )
-        
-        raise RuntimeError(f'Extraction failed: {yt_error}')
-
-
-class YTDLSource(discord.PCMVolumeTransformer):
-    def __init__(self, source, *, data, volume=0.5):
-        super().__init__(source, volume)
-        self.data = data
-        self.title = data.get('title')
-        self.url = data.get('url')
-        self.thumbnail = data.get('thumbnail')
-        self.webpage_url = data.get('webpage_url')
-
-    @classmethod
-    async def from_data(cls, data: dict, volume=0.5):
-        stream_url = data['url']
-        source = discord.FFmpegPCMAudio(stream_url, **FFMPEG_OPTIONS)
-        return cls(source, data=data, volume=volume)
-
-    @classmethod
-    async def from_url(cls, url: str, volume=0.5):
-        data = await asyncio.get_event_loop().run_in_executor(None, _extract_info, url)
-        return await cls.from_data(data, volume=volume)
 
 
 class MusicPlayer:
@@ -294,7 +41,6 @@ class MusicPlayer:
         self.history = []
 
         self._finished = asyncio.Event()
-
         self._task = ctx.bot.loop.create_task(self.player_loop())
 
     def _after_playing(self, error):
@@ -314,7 +60,7 @@ class MusicPlayer:
                     item = self._next_up
                     self._next_up = None
                 elif self.loop and self.current:
-                    item = (self.current.title, self.current.webpage_url)
+                    item = self.current
                 else:
                     item = await asyncio.wait_for(self.queue.get(), timeout=300)
             except asyncio.TimeoutError:
@@ -323,45 +69,35 @@ class MusicPlayer:
             except asyncio.CancelledError:
                 return
 
-            if isinstance(item, str):
-                url = item
-                title = url
-                data = None
-            else:
-                title = item[0]
-                url = item[1]
-                data = item[2] if len(item) >= 3 else None
-
-            try:
-                if data:
-                    source = await YTDLSource.from_data(data, volume=self.volume)
-                else:
-                    source = await YTDLSource.from_url(url, volume=self.volume)
-            except Exception as e:
-                await self._channel.send(f'Error processing song: `{e}`')
-                continue
-
-            self.current = source
+            # item is a wavelink.Playable when from queue
+            track = item
 
             vc = self._guild.voice_client
-            if not vc:
+            if not vc or not isinstance(vc, wavelink.Player):
                 await self._channel.send('Lost connection to voice channel.')
                 await self._cog.cleanup(self._guild)
                 return
 
             try:
-                vc.play(source, after=self._after_playing)
+                await vc.play(track)
             except Exception as e:
                 await self._channel.send(f'Error starting playback: `{e}`')
                 self.current = None
                 continue
 
+            self.current = track
+
             view = NowPlayingView(self, self._guild.id)
 
             try:
-                embed = discord.Embed(title=source.title, color=0xFFC0CB)
-                if source.thumbnail:
-                    embed.set_thumbnail(url=source.thumbnail)
+                embed = discord.Embed(
+                    title=track.title[:256],
+                    color=0xFFC0CB,
+                )
+                if track.artwork:
+                    embed.set_thumbnail(url=track.artwork)
+                embed.add_field(name='Channel', value=track.author or 'Unknown')
+                embed.add_field(name='Duration', value=_format_duration(track.length))
                 if self.np:
                     try:
                         await self.np.delete()
@@ -371,22 +107,20 @@ class MusicPlayer:
             except Exception:
                 pass
 
+            # Wait for playback to finish (poll every 5s)
             try:
-                await asyncio.wait_for(self._finished.wait(), timeout=600)
-            except asyncio.TimeoutError:
-                vc = self._guild.voice_client
-                if vc:
-                    vc.stop()
-
-            if not self._stop and self.current:
-                self.history.append((self.current.title, self.current.webpage_url))
-                if len(self.history) > 20:
-                    self.history.pop(0)
-
-            try:
-                source.cleanup()
+                while vc.playing or vc.paused:
+                    await asyncio.sleep(2)
+                    if self._stop:
+                        await vc.stop()
+                        break
             except Exception:
                 pass
+
+            if not self._stop and self.current:
+                self.history.append(self.current)
+                if len(self.history) > 20:
+                    self.history.pop(0)
 
             if not self.loop:
                 self.current = None
@@ -430,19 +164,19 @@ class NowPlayingView(discord.ui.View):
         player._stop = True
         vc = interaction.guild.voice_client
         if vc:
-            vc.stop()
+            await vc.stop()
         await interaction.response.defer()
 
     @discord.ui.button(label='||', style=discord.ButtonStyle.secondary)
     async def pause_play(self, interaction: discord.Interaction, button: discord.ui.Button):
         vc = interaction.guild.voice_client
-        if not vc:
+        if not vc or not isinstance(vc, wavelink.Player):
             return await interaction.response.send_message('Not connected.', ephemeral=True)
-        if vc.is_paused():
-            vc.resume()
+        if vc.paused:
+            await vc.pause(False)
             button.label = '||'
-        elif vc.is_playing():
-            vc.pause()
+        elif vc.playing:
+            await vc.pause(True)
             button.label = '\u25B7'
         else:
             return await interaction.response.send_message('Nothing playing.', ephemeral=True)
@@ -456,7 +190,7 @@ class NowPlayingView(discord.ui.View):
         player._stop = True
         vc = interaction.guild.voice_client
         if vc:
-            vc.stop()
+            await vc.stop()
         await interaction.response.defer()
 
     @discord.ui.button(label='\u27F3', style=discord.ButtonStyle.secondary)
@@ -465,6 +199,15 @@ class NowPlayingView(discord.ui.View):
         player.loop = not player.loop
         button.label = '\u27F2' if player.loop else '\u27F3'
         await interaction.response.edit_message(view=self)
+
+
+def _format_duration(ms: int) -> str:
+    seconds = ms // 1000
+    minutes, sec = divmod(seconds, 60)
+    hours, minutes = divmod(minutes, 60)
+    if hours:
+        return f'{hours}h {minutes}m {sec}s'
+    return f'{minutes}m {sec}s'
 
 
 class Music(commands.Cog):
@@ -478,7 +221,6 @@ class Music(commands.Cog):
             player = self.players.get(guild.id)
             if player:
                 player._stop = True
-                player._finished.set()
                 if player.np:
                     try:
                         await player.np.delete()
@@ -490,7 +232,9 @@ class Music(commands.Cog):
         except Exception:
             pass
         try:
-            await guild.voice_client.disconnect(force=True)
+            vc = guild.voice_client
+            if vc:
+                await vc.disconnect(force=True)
         except Exception:
             pass
         self.players.pop(guild.id, None)
@@ -518,50 +262,67 @@ class Music(commands.Cog):
             if vc and vc.channel and len([m for m in vc.channel.members if not m.bot]) == 0:
                 await self.cleanup(member.guild)
 
+    async def _ensure_voice(self, ctx) -> bool:
+        vc = ctx.voice_client
+        if not vc or not isinstance(vc, wavelink.Player):
+            if ctx.author.voice:
+                try:
+                    await ctx.author.voice.channel.edit(rtc_region='singapore')
+                except Exception:
+                    pass
+                vc = await ctx.author.voice.channel.connect(cls=wavelink.Player, reconnect=True)
+            else:
+                await ctx.send('You are not connected to a voice channel.')
+                return False
+        elif ctx.author.voice and vc.channel != ctx.author.voice.channel:
+            await vc.move_to(ctx.author.voice.channel)
+        return True
+
     @commands.hybrid_command(name='play', aliases=['p'])
     async def play_(self, ctx, *, search: str):
-        """Plays a song from YouTube."""
-        async with ctx.typing():
-            vc = ctx.voice_client
-            if not vc:
-                if ctx.author.voice:
-                    try:
-                        await ctx.author.voice.channel.edit(rtc_region='singapore')
-                    except Exception:
-                        pass
-                    vc = await ctx.author.voice.channel.connect(reconnect=True)
-                else:
-                    return await ctx.send('You are not connected to a voice channel.')
-            elif ctx.author.voice and vc.channel != ctx.author.voice.channel:
-                await vc.move_to(ctx.author.voice.channel)
+        """Plays a song from YouTube or SoundCloud."""
+        if not await self._ensure_voice(ctx):
+            return
 
+        vc = ctx.voice_client
+
+        async with ctx.typing():
             try:
-                data = await asyncio.get_event_loop().run_in_executor(
-                    None, _extract_info, search
+                tracks = await wavelink.Playable.search(
+                    search,
+                    source=wavelink.TrackSource.YouTube,
                 )
-                title = data.get('title', search)
-                url = data.get('webpage_url', search)
-                queue_item = (title, url, data)
+                if not tracks:
+                    # Fallback to SoundCloud
+                    tracks = await wavelink.Playable.search(
+                        search,
+                        source=wavelink.TrackSource.SC,
+                    )
+                if not tracks:
+                    return await ctx.send('No results found.')
+
+                track = tracks[0] if isinstance(tracks, list) else tracks
             except Exception as e:
-                await ctx.send(f'Failed to search for song: `{e}`')
-                return
+                return await ctx.send(f'Search failed: `{e}`')
 
         player = await self.get_player(ctx)
-        await player.queue.put(queue_item)
+        await player.queue.put(track)
 
         embed = discord.Embed(title='Added to Queue', color=0xFFC0CB)
-        embed.description = f'[{title}]({url})'
+        embed.description = f'[{track.title}]({track.uri})'
+        if track.artwork:
+            embed.set_thumbnail(url=track.artwork)
         await ctx.send(embed=embed)
 
     @commands.hybrid_command(name='skip', aliases=['s'])
     async def skip_(self, ctx):
         """Skips the current song."""
         vc = ctx.voice_client
-        if not vc or not (vc.is_playing() or vc.is_paused()):
+        if not vc or not (getattr(vc, 'playing', False) or getattr(vc, 'paused', False)):
             return await ctx.send('Nothing is playing.')
         player = await self.get_player(ctx)
         player._stop = True
-        vc.stop()
+        await vc.stop()
         player.current = None
         await ctx.send(embed=discord.Embed(description='Skipped', color=0xFFC0CB))
 
@@ -578,8 +339,10 @@ class Music(commands.Cog):
     async def pause_(self, ctx):
         """Pauses the music."""
         vc = ctx.voice_client
-        if vc and vc.is_playing():
-            vc.pause()
+        if not vc or not isinstance(vc, wavelink.Player):
+            return await ctx.send('Not connected to Lavalink.')
+        if vc.playing:
+            await vc.pause(True)
             await ctx.send(embed=discord.Embed(description='Paused', color=0xFFC0CB))
         else:
             await ctx.send('Nothing is playing.')
@@ -588,8 +351,10 @@ class Music(commands.Cog):
     async def resume_(self, ctx):
         """Resumes the paused music."""
         vc = ctx.voice_client
-        if vc and vc.is_paused():
-            vc.resume()
+        if not vc or not isinstance(vc, wavelink.Player):
+            return await ctx.send('Not connected.')
+        if vc.paused:
+            await vc.pause(False)
             await ctx.send(embed=discord.Embed(description='Resumed', color=0xFFC0CB))
         else:
             await ctx.send('Not paused.')
@@ -602,7 +367,7 @@ class Music(commands.Cog):
             return await ctx.send('Queue is empty.')
         upcoming = list(itertools.islice(player.queue._queue, 0, 10))
         fmt = '\n'.join(
-            f"**{i+1}.** {item[0]}" for i, item in enumerate(upcoming)
+            f"**{i+1}.** {item.title}" for i, item in enumerate(upcoming)
         )
         await ctx.send(embed=discord.Embed(title='Queue', description=fmt, color=0xFFC0CB))
 
@@ -610,25 +375,45 @@ class Music(commands.Cog):
     async def change_volume(self, ctx, vol: int):
         """Changes the bot volume (1-100)."""
         vc = ctx.voice_client
-        if not vc or not 0 < vol <= 100:
+        if not vc or not isinstance(vc, wavelink.Player):
+            return await ctx.send('Not connected.')
+        if not 0 < vol <= 100:
             return await ctx.send('Invalid volume (1-100).')
+        await vc.set_volume(vol)
         player = await self.get_player(ctx)
         player.volume = vol / 100
-        if vc.source:
-            vc.source.volume = vol / 100
         await ctx.send(embed=discord.Embed(description=f'Volume: {vol}%', color=0xFFC0CB))
+
+    @commands.hybrid_command(name='nowplaying', aliases=['np'])
+    async def nowplaying_(self, ctx):
+        """Shows the currently playing track."""
+        vc = ctx.voice_client
+        if not vc or not isinstance(vc, wavelink.Player) or not vc.playing:
+            return await ctx.send('Nothing is playing.')
+        track = vc.current
+        embed = discord.Embed(
+            title=track.title[:256],
+            url=track.uri,
+            color=0xFFC0CB,
+        )
+        if track.artwork:
+            embed.set_thumbnail(url=track.artwork)
+        embed.add_field(name='Channel', value=track.author or 'Unknown')
+        embed.add_field(name='Duration', value=_format_duration(track.length))
+        await ctx.send(embed=embed)
 
     @commands.hybrid_command(name='help')
     async def help_(self, ctx):
         """Shows all commands."""
         cmds = [
-            ('play <query>', 'Search & play from YouTube (high quality)'),
+            ('play <query>', 'Search & play from YouTube / SoundCloud via Lavalink'),
             ('skip', 'Skips the current song'),
             ('stop', 'Stops playback and disconnects'),
             ('pause', 'Pauses playback'),
             ('resume', 'Resumes playback'),
             ('volume <1-100>', 'Sets the volume'),
             ('queue', 'Shows the song queue'),
+            ('nowplaying', 'Shows the current track info'),
             ('clear-queue', 'Clears all queued songs'),
             ('shuffle', 'Shuffles the queue'),
             ('loop', 'Toggles loop mode'),
@@ -636,7 +421,7 @@ class Music(commands.Cog):
         ]
         embed = discord.Embed(title='Cachy Music', color=0xFFC0CB)
         embed.description = '\n\n'.join(f'**cachy {cmd}**\n{desc}' for cmd, desc in cmds)
-        embed.set_footer(text='YouTube via 10+ proxy fallbacks | High quality audio')
+        embed.set_footer(text='Powered by Lavalink | YouTube + SoundCloud')
         await ctx.send(embed=embed)
 
     @commands.hybrid_command(name='ping')

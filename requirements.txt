@@ -1,4 +1,3 @@
 discord.py[voice]
-yt-dlp
-curl-cffi
+wavelink>=3.0.0
 python-dotenv

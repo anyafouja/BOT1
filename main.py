@@ -1,16 +1,21 @@
+import asyncio
 import os
 import discord
 from discord.ext import commands
 from dotenv import load_dotenv
+import wavelink
 
-# Load environment variables
 load_dotenv()
 TOKEN = os.getenv('DISCORD_TOKEN')
 
-# Bot setup
+LAVALINK_URI = os.getenv('LAVALINK_URI', 'lavalink.triniumhost.com:4333')
+LAVALINK_PASSWORD = os.getenv('LAVALINK_PASSWORD', 'free')
+LAVALINK_SECURE = os.getenv('LAVALINK_SECURE', 'false').lower() == 'true'
+
 intents = discord.Intents.default()
 intents.message_content = True
 intents.voice_states = True
+
 
 class CachyBot(commands.Bot):
     def __init__(self):
@@ -21,35 +26,40 @@ class CachyBot(commands.Bot):
         )
 
     async def setup_hook(self):
-        # Explicitly load opus
-        if not discord.opus.is_loaded():
-            for lib in ('libopus.so.0', 'libopus.so', 'libopus0.so', 'libopus.so.0.11.1'):
-                try:
-                    discord.opus.load_opus(lib)
-                    print(f"Loaded opus: {lib}")
-                    break
-                except Exception:
-                    continue
-            else:
-                print("Failed to load libopus - voice may not work")
+        await self.load_extension('cogs.music')
+        print("Loaded extension: cogs.music")
 
-        # Load cogs
+        nodes = [
+            wavelink.Node(
+                uri=f"ws://{LAVALINK_URI}",
+                password=LAVALINK_PASSWORD,
+            )
+        ]
         try:
-            await self.load_extension('cogs.music')
-            print("Loaded extension: cogs.music")
+            await asyncio.wait_for(wavelink.Pool.connect(nodes=nodes, client=self), timeout=15)
+            print(f"Connected to Lavalink: {LAVALINK_URI}")
+        except asyncio.TimeoutError:
+            print(f"Lavalink connection timeout (15s) to {LAVALINK_URI} — bot will retry on next play")
         except Exception as e:
-            print(f"Failed to load extension: {e}")
+            print(f"Lavalink connect failed: {e}")
 
-        # Sync slash commands
         await self.tree.sync()
         print("Synced slash commands.")
 
+
 bot = CachyBot()
+
 
 @bot.event
 async def on_ready():
     print(f'Logged in as {bot.user.name} (ID: {bot.user.id})')
     print('------')
+
+
+@bot.event
+async def on_wavelink_node_ready(payload: wavelink.NodeReadyEventPayload):
+    print(f"Lavalink node ready: {payload.node}")
+
 
 @bot.event
 async def on_command_error(ctx, error):
@@ -57,6 +67,7 @@ async def on_command_error(ctx, error):
         return
     print(f"Error: {error}")
     await ctx.send(f"An error occurred: {error}")
+
 
 if __name__ == "__main__":
     if not TOKEN:

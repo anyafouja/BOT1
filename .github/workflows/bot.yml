@@ -18,8 +18,8 @@ jobs:
         with:
           python-version: "3.12"
       - run: pip install -q -r requirements.txt
-      - run: echo "DISCORD_TOKEN=${{ secrets.DISCORD_TOKEN }}" > .env
-      - run: printf "%s" "${{ secrets.YT_COOKIES }}" | base64 -d > cookies.txt
+      - run: |
+          echo "DISCORD_TOKEN=${{ secrets.DISCORD_TOKEN }}" > .env
+          echo "LAVALINK_URI=${{ secrets.LAVALINK_URI || 'de-01.strixnodes.com:2010' }}" >> .env
+          echo "LAVALINK_PASSWORD=${{ secrets.LAVALINK_PASSWORD || 'glace' }}" >> .env
       - run: python3 main.py
-        env:
-          YT_COOKIES_FILE: cookies.txt
