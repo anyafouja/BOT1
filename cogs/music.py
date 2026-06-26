@@ -330,7 +330,7 @@ class Music(commands.Cog):
     async def stop_(self, ctx):
         """Stops playback and disconnects the bot."""
         vc = ctx.voice_client
-        if not vc or not vc.is_connected():
+        if not vc or not vc.connected:
             return await ctx.send('Not connected.')
         await self.cleanup(ctx.guild)
         await ctx.send(embed=discord.Embed(description='Stopped', color=0xFFC0CB))
