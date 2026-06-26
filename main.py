@@ -23,66 +23,67 @@ class CachyBot(commands.Bot):
         self._connecting = False
 
     async def _ensure_lavalink(self):
-        """Make sure at least one node CONNECTED. Wait or fresh-connect only."""
-        # If pool has nodes, just poll for CONNECTED — no reconnect
-        pool_nodes = list(wavelink.Pool.nodes)
-        if pool_nodes:
-            for n in pool_nodes:
-                if n.status == wavelink.NodeStatus.CONNECTED:
-                    return True
-            # Wait up to 30s for async connection to complete
-            for _ in range(30):
-                await asyncio.sleep(1)
-                for n in pool_nodes:
-                    if n.status == wavelink.NodeStatus.CONNECTED:
-                        return True
-            # Still not connected — try reconnect via Pool.reconnect
-            print("Lavalink node in pool but not CONNECTED — trying reconnect")
-            try:
-                await asyncio.wait_for(
-                    wavelink.Pool.reconnect(client=self), timeout=20)
-                for _ in range(15):
-                    await asyncio.sleep(1)
-                    for n in wavelink.Pool.nodes:
-                        if n.status == wavelink.NodeStatus.CONNECTED:
-                            print(f"Lavalink reconnected: {LAVALINK_URI}")
-                            return True
-            except Exception as e:
-                print(f"Lavalink reconnect failed: {e}")
-            return False
+        """Make sure at least one node CONNECTED. Safe reconnect or connect."""
+        # Pool.nodes may contain string IDs — filter to real Node objects
+        def real_nodes():
+            return [n for n in wavelink.Pool.nodes if isinstance(n, wavelink.Node)]
 
-        # Pool empty — fresh connect
+        nodes = real_nodes()
+        for n in nodes:
+            if n.status == wavelink.NodeStatus.CONNECTED:
+                return True
+
+        # Consolidate connect attempt
         if self._connecting:
             for _ in range(30):
                 await asyncio.sleep(1)
-                for n in wavelink.Pool.nodes:
+                for n in real_nodes():
                     if n.status == wavelink.NodeStatus.CONNECTED:
                         return True
             return False
 
         self._connecting = True
-        node = wavelink.Node(uri=f"ws://{LAVALINK_URI}", password=LAVALINK_PASSWORD)
+
+        # If pool has real nodes, use Pool.reconnect
+        if nodes:
+            for i in range(3):
+                try:
+                    await asyncio.wait_for(
+                        wavelink.Pool.reconnect(client=self), timeout=20)
+                    for _ in range(15):
+                        await asyncio.sleep(1)
+                        for n in real_nodes():
+                            if n.status == wavelink.NodeStatus.CONNECTED:
+                                self._connecting = False
+                                return True
+                except Exception as e:
+                    print(f"Lavalink reconnect err ({i+1}/3): {e}")
+                await asyncio.sleep(3)
+            self._connecting = False
+            return False
+
+        # Pool has only string IDs or empty — fresh connect
         for i in range(3):
+            node = wavelink.Node(uri=f"ws://{LAVALINK_URI}", password=LAVALINK_PASSWORD)
             try:
                 await asyncio.wait_for(
                     wavelink.Pool.connect(nodes=[node], client=self), timeout=20)
                 for _ in range(15):
                     await asyncio.sleep(1)
-                    for n in wavelink.Pool.nodes:
+                    for n in real_nodes():
                         if n.status == wavelink.NodeStatus.CONNECTED:
                             self._connecting = False
-                            print(f"Lavalink connected: {LAVALINK_URI}")
                             return True
+                # connect returned but node not CONNECTED yet — give up
                 self._connecting = False
                 return any(n.status == wavelink.NodeStatus.CONNECTED
-                          for n in wavelink.Pool.nodes)
+                          for n in real_nodes())
             except asyncio.TimeoutError:
                 print(f"Lavalink timeout ({i+1}/3)")
             except Exception as e:
                 print(f"Lavalink error ({i+1}/3): {e}")
             await asyncio.sleep(3)
         self._connecting = False
-        print("Lavalink failed after 3 attempts")
         return False
 
     async def setup_hook(self):
@@ -111,8 +112,17 @@ async def on_wavelink_node_ready(payload: wavelink.NodeReadyEventPayload):
 async def on_command_error(ctx, error):
     if isinstance(error, commands.CommandNotFound):
         return
+    # Don't send on already-acked interactions
+    if isinstance(error, commands.HybridCommandError):
+        error = error.original
+    try:
+        if ctx.interaction and ctx.interaction.response.is_done():
+            await ctx.interaction.followup.send(f"Error: {error}", ephemeral=True)
+        else:
+            await ctx.send(f"Error: {error}")
+    except Exception:
+        pass
     print(f"Error: {error}")
-    await ctx.send(f"Error: {error}")
 
 
 if __name__ == "__main__":
