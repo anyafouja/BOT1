@@ -22,7 +22,7 @@ class MusicPlayer:
         'bot', '_guild', '_channel', '_cog',
         'queue', 'current', 'np', 'volume',
         'loop', '_stop', '_next_up', 'history',
-        '_task', '_finished', '_current_track',
+        '_task', '_finished',
     )
 
     def __init__(self, ctx):
@@ -35,7 +35,6 @@ class MusicPlayer:
         self.np = None
         self.volume = 0.5
         self.current = None
-        self._current_track = None
         self.loop = False
         self._stop = False
         self._next_up = None
@@ -45,24 +44,10 @@ class MusicPlayer:
         self._task = ctx.bot.loop.create_task(self.player_loop())
 
     def _after_playing(self, error):
+        # Empty callback - all error handling done in player_loop
         if error:
-            print(f'[MusicPlayer] Playback error: {error}')
-            error_msg = str(error).lower()
-            if "requires login" in error_msg or "age restricted" in error_msg:
-                print(f'[MusicPlayer] Age-restricted video encountered')
-                self._current_track = None
-                # Schedule error message to be sent
-                asyncio.run_coroutine_threadsafe(
-                    self._send_error_message(f"⚠️ Skipping age-restricted video: **{self.current.title if self.current else 'Unknown'}**"),
-                    self.bot.loop
-                )
-            self.bot.loop.call_soon_threadsafe(self._finished.set)
-
-    async def _send_error_message(self, message: str):
-        try:
-            await self._channel.send(message)
-        except Exception:
-            pass
+            print(f'[MusicPlayer] Playback finished with error: {error}')
+        self.bot.loop.call_soon_threadsafe(self._finished.set)
 
 
     async def player_loop(self):
@@ -94,8 +79,6 @@ class MusicPlayer:
                 await self._cog.cleanup(self._guild)
                 return
 
-            self._current_track = track
-
             try:
                 await vc.play(track)
             except wavelink.errors.QueueEmpty:
@@ -104,17 +87,15 @@ class MusicPlayer:
             except wavelink.errors.TrackException as e:
                 error_msg = str(e).lower()
                 if "requires login" in error_msg or "age restricted" in error_msg:
-                    await self._send_error_message(f"⚠️ Skipping age-restricted video: **{track.title}**")
+                    await self._channel.send(f"⚠️ Skipping age-restricted video: **{track.title}**")
                 else:
-                    await self._send_error_message(f"⚠️ Playback error: `{e}`")
+                    await self._channel.send(f"⚠️ Playback error: `{e}`")
                 self.current = None
-                self._current_track = None
                 self._finished.set()
                 continue
             except Exception as e:
                 print(f'[MusicPlayer] Play error: {e}')
                 self.current = None
-                self._current_track = None
                 self._finished.set()
                 continue
 
@@ -146,8 +127,21 @@ class MusicPlayer:
                     if self._stop:
                         await vc.stop()
                         break
-            except Exception:
-                pass
+                    # Check if current track changed or became None (playback error)
+                    if vc.current is None and self.current:
+                        error_msg = "Playback stopped unexpectedly"
+                        await self._channel.send(f"⚠️ {error_msg}")
+                        self.current = None
+                        self._finished.set()
+                        break
+            except Exception as e:
+                error_msg = str(e).lower()
+                if "requires login" in error_msg or "age restricted" in error_msg:
+                    await self._channel.send(f"⚠️ Skipping age-restricted video: **{self.current.title if self.current else 'Unknown'}**")
+                else:
+                    await self._channel.send(f"⚠️ Playback error: `{e}`")
+                self.current = None
+                self._finished.set()
 
             if not self._stop and self.current:
                 self.history.append(self.current)
@@ -156,7 +150,6 @@ class MusicPlayer:
 
             if not self.loop:
                 self.current = None
-                self._current_track = None
 
             if not self.current and self.queue.empty():
                 if self.np:
