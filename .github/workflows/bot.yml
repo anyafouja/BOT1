@@ -7,7 +7,7 @@ on:
     - cron: "15 */5 * * *"
 concurrency:
   group: cachy-bot
-  cancel-in-progress: true
+  cancel-in-progress: false
 jobs:
   run-bot:
     runs-on: ubuntu-latest
@@ -20,6 +20,6 @@ jobs:
       - run: pip install -q -r requirements.txt
       - run: |
           echo "DISCORD_TOKEN=${{ secrets.DISCORD_TOKEN }}" > .env
-          echo "LAVALINK_URI=${{ secrets.LAVALINK_URI || 'lavalink.jirayu.net:13592' }}" >> .env
-          echo "LAVALINK_PASSWORD=${{ secrets.LAVALINK_PASSWORD || 'youshallnotpass' }}" >> .env
+          echo "LAVALINK_URI=${{ secrets.LAVALINK_URI || 'de-01.strixnodes.com:2010' }}" >> .env
+          echo "LAVALINK_PASSWORD=${{ secrets.LAVALINK_PASSWORD || 'glace' }}" >> .env
       - run: python3 main.py
