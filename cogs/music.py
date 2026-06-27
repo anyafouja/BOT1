@@ -46,7 +46,11 @@ class MusicPlayer:
     def _after_playing(self, error):
         if error:
             print(f'[MusicPlayer] Playback error: {error}')
-        self.bot.loop.call_soon_threadsafe(self._finished.set)
+            error_msg = str(error).lower()
+            if "requires login" in error_msg or "age restricted" in error_msg:
+                print(f'[MusicPlayer] Age-restricted video encountered')
+            self.bot.loop.call_soon_threadsafe(self._finished.set)
+
 
     async def player_loop(self):
         await self.bot.wait_until_ready()
@@ -81,6 +85,15 @@ class MusicPlayer:
                 await vc.play(track)
             except wavelink.errors.QueueEmpty:
                 self.current = None
+                continue
+            except wavelink.errors.TrackException as e:
+                error_msg = str(e).lower()
+                if "requires login" in error_msg or "age restricted" in error_msg:
+                    await self._channel.send(f"⚠️ Skipping age-restricted video: **{track.title}**")
+                else:
+                    await self._channel.send(f"⚠️ Playback error: `{e}`")
+                self.current = None
+                self._finished.set()
                 continue
             except Exception as e:
                 print(f'[MusicPlayer] Play error: {e}')
@@ -333,6 +346,11 @@ class Music(commands.Cog):
 
             track = tracks if isinstance(tracks, wavelink.Playlist) else tracks[0]
 
+        except wavelink.errors.TrackException as e:
+            error_msg = str(e).lower()
+            if "requires login" in error_msg or "age restricted" in error_msg:
+                return await ctx.send(f"⚠️ Cannot play this video: **{search}** (Age-restricted/Private)")
+            return await ctx.send(f'Search failed: `{e}`')
         except Exception as e:
             return await ctx.send(f'Search failed: `{e}`')
 
