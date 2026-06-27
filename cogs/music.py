@@ -69,7 +69,6 @@ class MusicPlayer:
             except asyncio.CancelledError:
                 return
 
-            # item is a wavelink.Playable when from queue
             track = item
 
             vc = self._guild.voice_client
@@ -80,9 +79,13 @@ class MusicPlayer:
 
             try:
                 await vc.play(track)
-            except Exception as e:
-                await self._channel.send(f'Error starting playback: `{e}`')
+            except wavelink.errors.QueueEmpty:
                 self.current = None
+                continue
+            except Exception as e:
+                print(f'[MusicPlayer] Play error: {e}')
+                self.current = None
+                self._finished.set()
                 continue
 
             self.current = track
@@ -107,7 +110,6 @@ class MusicPlayer:
             except Exception:
                 pass
 
-            # Wait for playback to finish (poll every 5s)
             try:
                 while vc.playing or vc.paused:
                     await asyncio.sleep(2)
@@ -226,9 +228,13 @@ class Music(commands.Cog):
                         await player.np.delete()
                     except Exception:
                         pass
-                    player.np = None
+                player.np = None
                 if player._task and not player._task.done():
                     player._task.cancel()
+                    try:
+                        await player._task
+                    except asyncio.CancelledError:
+                        pass
         except Exception:
             pass
         try:
@@ -252,12 +258,13 @@ class Music(commands.Cog):
     @commands.Cog.listener()
     async def on_voice_state_update(self, member, before, after):
         if member.id == self.bot.user.id:
-            if after.channel is None:
-                await self.cleanup(member.guild)
             return
         vc = member.guild.voice_client
-        if vc and vc.channel and len([m for m in vc.channel.members if not m.bot]) == 0:
-            await asyncio.sleep(60)
+        if not vc or not vc.channel:
+            return
+        non_bot_members = [m for m in vc.channel.members if not m.bot]
+        if len(non_bot_members) == 0:
+            await asyncio.sleep(5)
             vc = member.guild.voice_client
             if vc and vc.channel and len([m for m in vc.channel.members if not m.bot]) == 0:
                 await self.cleanup(member.guild)
@@ -265,7 +272,6 @@ class Music(commands.Cog):
     async def _ensure_voice(self, ctx) -> bool:
         vc = ctx.voice_client
         if not vc or not isinstance(vc, wavelink.Player):
-            # Find user's voice channel — search guild directly (no cache dependency)
             target = None
             if ctx.author.voice:
                 target = ctx.author.voice.channel
@@ -275,7 +281,6 @@ class Music(commands.Cog):
                         target = ch
                         break
             if target:
-                # Ensure Lavalink node before connecting voice
                 if not await self.bot.ensure_node():
                     await ctx.send('Lavalink node unavailable — try again later.')
                     return False
@@ -283,7 +288,14 @@ class Music(commands.Cog):
                     await target.edit(rtc_region='singapore')
                 except Exception:
                     pass
-                vc = await target.connect(cls=wavelink.Player, reconnect=True)
+                try:
+                    vc = await target.connect(cls=wavelink.Player, reconnect=True)
+                except asyncio.TimeoutError:
+                    await ctx.send('Voice connection timeout — try again.')
+                    return False
+                except Exception as e:
+                    await ctx.send(f'Voice connection failed: {e}')
+                    return False
             else:
                 await ctx.send('You are not connected to a voice channel.')
                 return False
@@ -312,7 +324,6 @@ class Music(commands.Cog):
                 source=wavelink.TrackSource.YouTube,
             )
             if not tracks:
-                # Fallback to SoundCloud
                 tracks = await wavelink.Playable.search(
                     search,
                     source=wavelink.TrackSource.SC,
@@ -346,7 +357,8 @@ class Music(commands.Cog):
     async def skip_(self, ctx):
         """Skips the current song."""
         await ctx.defer()
-        if not await self._ensure_node(ctx): return
+        if not await self._ensure_node(ctx):
+            return
         vc = ctx.voice_client
         if not vc or not (getattr(vc, 'playing', False) or getattr(vc, 'paused', False)):
             return await ctx.send('Nothing is playing.')
@@ -360,7 +372,8 @@ class Music(commands.Cog):
     async def stop_(self, ctx):
         """Stops playback and disconnects the bot."""
         await ctx.defer()
-        if not await self._ensure_node(ctx): return
+        if not await self._ensure_node(ctx):
+            return
         vc = ctx.voice_client
         if not vc or not vc.connected:
             return await ctx.send('Not connected.')
@@ -371,7 +384,8 @@ class Music(commands.Cog):
     async def pause_(self, ctx):
         """Pauses the music."""
         await ctx.defer()
-        if not await self._ensure_node(ctx): return
+        if not await self._ensure_node(ctx):
+            return
         vc = ctx.voice_client
         if not vc or not isinstance(vc, wavelink.Player):
             return await ctx.send('Not connected to Lavalink.')
@@ -385,7 +399,8 @@ class Music(commands.Cog):
     async def resume_(self, ctx):
         """Resumes the paused music."""
         await ctx.defer()
-        if not await self._ensure_node(ctx): return
+        if not await self._ensure_node(ctx):
+            return
         vc = ctx.voice_client
         if not vc or not isinstance(vc, wavelink.Player):
             return await ctx.send('Not connected.')
@@ -411,7 +426,8 @@ class Music(commands.Cog):
     async def change_volume(self, ctx, vol: int):
         """Changes the bot volume (1-100)."""
         await ctx.defer()
-        if not await self._ensure_node(ctx): return
+        if not await self._ensure_node(ctx):
+            return
         vc = ctx.voice_client
         if not vc or not isinstance(vc, wavelink.Player):
             return await ctx.send('Not connected.')
